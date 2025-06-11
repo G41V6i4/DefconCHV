@@ -1,0 +1,91 @@
+version: '3.8'
+
+networks:
+  car_network:
+    driver: bridge
+
+services:
+  # Gateway ECU - Dynamic bridge
+  gateway_ecu:
+    build: 
+      context: ./gateway_ecu
+    container_name: gateway_ecu
+    networks:
+      - car_network
+    environment:
+      - GATEWAY_MODE=dynamic
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    
+  # Infotainment ECU
+  infotainment_ecu:
+    build: ./infotainment_ecu
+    container_name: infotainment_ecu
+    networks:
+      - car_network
+    environment:
+      - CAN_INTERFACE=vcan0  # 이름은 유지할 수 있지만 내부적으로 다르게 설정해야 함
+      - WEB_PORT=8888
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      - gateway_ecu
+      - can_setup
+    ports:
+      - "8888:8888"  # 외부에서 웹 접근을 위한 포트 매핑
+    
+  # Engine ECU
+  engine_ecu:
+    build: ./engine_ecu
+    container_name: engine_ecu
+    networks:
+      - car_network
+    environment:
+      - CAN_INTERFACE=vcan1  # 이름은 유지할 수 있지만 내부적으로 다르게 설정해야 함
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      - gateway_ecu
+      - can_setup
+    
+  # CAN setup service - 브릿지 네트워크로 변경
+  can_setup:
+    image: alpine:latest
+    container_name: can_setup
+    networks:
+      - car_network
+    command: |
+      sh -c "
+        apk add --no-cache iproute2 can-utils
+        # 브릿지 네트워크에서도 vcan 인터페이스 설정
+        ip link add dev vcan0 type vcan 2>/dev/null || true
+        ip link set up vcan0
+        ip link add dev vcan1 type vcan 2>/dev/null || true
+        ip link set up vcan1
+        echo 'Virtual CAN interfaces ready'
+        sleep infinity
+      "
+    privileged: true
+    
+  # Monitor for debugging
+  can_monitor:
+    image: alpine:latest
+    container_name: can_monitor
+    networks:
+      - car_network
+    command: |
+      sh -c "
+        apk add --no-cache iproute2 can-utils
+        echo 'CAN Monitor Ready'
+        echo 'Use: candump vcanX to monitor specific interface'
+        echo 'Available interfaces:'
+        ip link show | grep vcan
+        sleep infinity
+      "
+    privileged: true
+    stdin_open: true
+    tty: true

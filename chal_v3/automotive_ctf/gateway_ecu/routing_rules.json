@@ -1,0 +1,51 @@
+{
+    "routing_tables": [
+        {
+            "name": "infotainment_to_engine",
+            "id_range": "0x300-0x3FF",
+            "source": "external",
+            "target": "internal",
+            "allowed": true
+        },
+        {
+            "name": "engine_to_infotainment",
+            "id_range": "0x700-0x7FF",
+            "source": "internal",
+            "target": "external",
+            "allowed": true
+        }
+    ],
+    
+    "external_to_internal": {
+        "allowed_ranges": ["0x300-0x3FF"],
+        "blocked_ids": ["0x3FF"],
+        "default_policy": "deny"
+    },
+    
+    "internal_to_external": {
+        "allowed_ranges": ["0x700-0x7FF"],
+        "blocked_ids": ["0x7E0", "0x7DF"],
+        "default_policy": "deny"
+    },
+    
+    "client_access": {
+        "allowed_ranges": ["0x100-0x7FF"],
+        "blocked_ids": ["0x7E0", "0x7DF"],
+        "rate_limit": 100
+    },
+    
+    "security_levels": {
+        "0": {
+            "name": "unauthenticated",
+            "allowed_ids": []
+        },
+        "1": {
+            "name": "authenticated",
+            "allowed_ids": ["0x300-0x3FF"]
+        },
+        "2": {
+            "name": "privileged",
+            "allowed_ids": ["0x300-0x7FF"]
+        }
+    }
+}

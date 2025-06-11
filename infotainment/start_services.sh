@@ -1,18 +1,23 @@
 #!/bin/bash
 
-# CAN 모듈 로드
-modprobe can
-modprobe can_raw
-modprobe vcan
+echo "Starting Infotainment ECU..."
 
-# vcan 인터페이스 설정
-ip link add dev vcan0 type vcan
-ip link set up vcan0
+# CAN 설정 (에러 무시)
+modprobe can 2>/dev/null || true
+modprobe can_raw 2>/dev/null || true  
+modprobe vcan 2>/dev/null || true
+ip link add dev vcan0 type vcan 2>/dev/null || true
+ip link set up vcan0 2>/dev/null || true
 
-# 서비스 컴파일
 cd /app
-make clean
-make
 
-# 서비스 시작 (socat으로 포트 1234에 바인딩)
-socat TCP-LISTEN:1234,reuseaddr,fork EXEC:./infotainment_service
+# 기존 프로세스 정리
+pkill -f infotainment_service 2>/dev/null || true
+pkill -f socat 2>/dev/null || true
+
+# 컴파일
+make clean && make
+
+# 직접 실행 (socat 없이)
+echo "Starting infotainment service on port 1234..."
+./infotainment_service

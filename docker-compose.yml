@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # CTF 관리 서버
+  ctf-manager:
+    build: 
+      context: ./manager
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./firmware:/opt/ctf/firmware
+    privileged: true
+    depends_on:
+      - gateway-shared
+      - engine-shared
+
+  # 공유 Gateway ECU (항상 실행)
+  gateway-shared:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: gateway_shared
+    networks:
+      - ecu_shared_network
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    volumes:
+      - /lib/modules:/lib/modules:ro
+
+  # 공유 Engine ECU (항상 실행)
+  engine-shared:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: engine_shared
+    networks:
+      - ecu_shared_network
+    cap_add:
+      - NET_ADMIN
+    restart: unless-stopped
+    volumes:
+      - /lib/modules:/lib/modules:ro
+
+networks:
+  ecu_shared_network:
+    driver: bridge
+    name: ecu_shared_network

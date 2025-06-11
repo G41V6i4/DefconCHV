@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  gateway_ecu:
+    build: ./gateway_ecu
+    container_name: gateway_ecu
+    networks:
+      - can_network
+      - external_network
+    ports:
+      - "8080:8080"  # WebSocket for players
+      - "8081:8081"  # Admin interface
+    environment:
+      - CAN_INTERFACE=vcan0
+      - GATEWAY_MODE=ctf
+      - MAX_CONNECTIONS=50
+    volumes:
+      - can_socket:/var/run
+      - ./logs:/var/log/gateway
+    privileged: true
+    stdin_open: true
+    tty: true
+    
+  infotainment_ecu:
+    build: 
+      context: ./info_ecu
+      dockerfile: Dockerfile.c
+    container_name: infotainment_ecu_vulnerable
+    networks:
+      - can_network
+      - external_network
+    ports:
+      - "8888:8888"  # Web interface
+      - "9999:9999"  # Media server
+    environment:
+      - CAN_INTERFACE=vcan0
+      - VULNERABLE=true
+    volumes:
+      - can_socket:/var/run
+      - ./infotainment_ecu/media:/app/media
+    depends_on:
+      - gateway_ecu
+    privileged: true
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE  # For debugging
+    stdin_open: true
+    tty: true
+    
+  engine_ecu:
+    build: 
+      context: ./engine_ecu
+      dockerfile: Dockerfile
+    container_name: engine_ecu_secure
+    networks:
+      - can_network
+    environment:
+      - CAN_INTERFACE=vcan0
+      - SECURE_MODE=true
+    volumes:
+      - can_socket:/var/run
+      - ./engine_ecu/secret.txt:/app/secret.txt:ro
+    depends_on:
+      - gateway_ecu
+    privileged: true
+    stdin_open: true
+    tty: true
+    
+  can_setup:
+    image: alpine:latest
+    container_name: can_setup
+    command: |
+      sh -c "
+        apk add --no-cache iproute2 can-utils
+        ip link add dev vcan0 type vcan
+        ip link set up vcan0
+        echo 0 > /proc/sys/kernel/randomize_va_space
+        sleep infinity
+      "
+    networks:
+      - can_network
+    volumes:
+      - can_socket:/var/run
+      - /proc/sys/kernel:/proc/sys/kernel
+    privileged: true
+    
+  exploit_dev:
+    image: python:3.9
+    container_name: exploit_dev
+    working_dir: /exploits
+    command: tail -f /dev/null
+    networks:
+      - external_network
+    volumes:
+      - ./exploits:/exploits
+      - ./tools:/tools
+    environment:
+      - PYTHONUNBUFFERED=1
+    stdin_open: true
+    tty: true
+    depends_on:
+      - gateway_ecu
+      - infotainment_ecu
+      - engine_ecu
+    
+networks:
+  can_network:
+    driver: bridge
+    internal: true
+  external_network:
+    driver: bridge
+    
+volumes:
+  can_socket:
+    driver: local

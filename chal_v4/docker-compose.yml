@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  router:
+    build: ./router
+    container_name: ecu_challenge_router
+    ports:
+      - "1337:1337"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    networks:
+      - challenge_network
+
+networks:
+  challenge_network:
+    driver: bridge

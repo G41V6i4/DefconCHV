@@ -1,178 +1,164 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <sys/wait.h>
 
-#define PORT 1234
-#define BUFFER_SIZE 1024
+char global_buffer[64];
+int debug_mode = 0;
+int key = 0;
 
-// 좀비 프로세스 방지
-void sigchld_handler(int sig) {
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+void show_menu() {
+    printf("=== Infotainment System v1.2.3 ===\n");
+    printf("1. Radio Control\n");
+    printf("2. Navigation\n");
+    printf("3. Diagnostics\n");
+    if (debug_mode) {
+        printf("9. Debug Menu\n");
+    }
+    printf("0. Exit\n");
+    printf("Choice: ");
+    fflush(stdout);
 }
 
-void handle_client(int client_socket) {
-    char buffer[BUFFER_SIZE];
-    char *menu = "=== Infotainment System v1.2.3 ===\n"
-                 "1. Radio Control\n"
-                 "2. Navigation\n" 
-                 "3. Diagnostics\n"
-                 "0. Exit\n"
-                 "Choice: ";
+void setup_environment() 
+{
+    int v1 = 0;
+    char dummy[0x10];
+    FILE *urandom;
     
-    while (1) {
-        // 메뉴 전송
-        if (send(client_socket, menu, strlen(menu), 0) < 0) break;
-        
-        // 입력 받기
-        memset(buffer, 0, BUFFER_SIZE);
-        int bytes = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-        if (bytes <= 0) break;
-        
-        buffer[bytes] = '\0';
-        int choice = atoi(buffer);
-        
-        switch (choice) {
-            case 1:
-                send(client_socket, "Radio: Playing FM 101.5\n\n", 25, 0);
-                break;
-            case 2:
-                send(client_socket, "Navigation: GPS Ready\n\n", 23, 0);
-                break;
-            case 3: {
-                send(client_socket, "Enter diagnostic command: ", 26, 0);
-                memset(buffer, 0, BUFFER_SIZE);
-                bytes = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-                if (bytes <= 0) break;
-                
-                buffer[bytes] = '\0';
-                
-                if (strstr(buffer, "ENABLE_DEBUG_MODE_12345") != NULL) {
-                    send(client_socket, "Debug mode enabled!\nDebug> ", 28, 0);
-                    memset(buffer, 0, BUFFER_SIZE);
-                    bytes = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-                    if (bytes <= 0) break;
-                    
-                    buffer[bytes] = '\0';
-                    
-                    if (strstr(buffer, "shell") != NULL) {
-                        send(client_socket, "Shell access granted! Use 'exit' to return.\n", 45, 0);
-                        // 간단한 쉘 시뮬레이션
-                        send(client_socket, "$ ", 2, 0);
-                        while (1) {
-                            memset(buffer, 0, BUFFER_SIZE);
-                            bytes = recv(client_socket, buffer, BUFFER_SIZE - 1, 0);
-                            if (bytes <= 0) break;
-                            buffer[bytes] = '\0';
-                            
-                            if (strstr(buffer, "exit")) {
-                                send(client_socket, "Exiting shell...\n\n", 18, 0);
-                                break;
-                            } else if (strstr(buffer, "ls")) {
-                                send(client_socket, "firmware.bin  debug.log  secrets.txt\n$ ", 39, 0);
-                            } else if (strstr(buffer, "cat secrets.txt")) {
-                                send(client_socket, "CTF{infotainment_compromised}\n$ ", 32, 0);
-                            } else {
-                                send(client_socket, "Command not found\n$ ", 19, 0);
-                            }
-                        }
-                    } else {
-                        send(client_socket, "Unknown debug command\n\n", 23, 0);
-                    }
-                } else {
-                    send(client_socket, "Diagnostic completed\n\n", 22, 0);
-                }
-                break;
-            }
-            case 0:
-                send(client_socket, "Goodbye!\n", 9, 0);
-                close(client_socket);
-                return;
-            default:
-                send(client_socket, "Invalid option\n\n", 16, 0);
-        }
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    
+    // Replace rand() with /dev/urandom
+    urandom = fopen("/dev/urandom", "r");
+    if (urandom) {
+        fread(&v1, sizeof(int), 1, urandom);
+        v1 = v1 % 0xffff;  // Keep the same range as the original
+        fclose(urandom);
     }
-    
-    close(client_socket);
+    key = v1;
+}
+
+int login()
+{
+    int idx;
+    char ch;
+    char id[0x10];
+    char pw[0x10];
+
+    puts("[*] Id: ");
+    idx = 0;
+    while (idx<0x10)
+    {
+        read(0, &ch, 1);
+        if (ch == '\n') break;
+        id[idx] = ch;
+        idx++;
+    }
+    puts("[*] Password: ");
+    idx = 0;
+    while (idx<0x10)
+    {
+        read(0, &ch, 1);
+        if (ch == '\n') break;
+        pw[idx] = ch;
+        idx++;
+    }
+
+    if(strncmp(id, "CHV", 3) == 0 && strncmp(pw, "G41V6!4", 7) == 0)
+    {
+        printf("Hello! %s\n", id);
+        return 1;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+int menu()
+{
+    int sel = 0;
+    printf("> ");
+    scanf("%d", &sel);
+    return sel;
 }
 
 int main() {
-    int server_socket, client_socket;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_len = sizeof(client_addr);
+    int verify;
+    char input[256];
+    register void *rbp asm("rbp");
+    setup_environment();
     
-    // 시그널 핸들러 설정
-    signal(SIGCHLD, sigchld_handler);
-    signal(SIGPIPE, SIG_IGN);
-    
-    printf("Starting Infotainment ECU Service...\n");
-    
-    // 소켓 생성
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        perror("Socket creation failed");
-        return 1;
-    }
-    
-    // 주소 재사용 설정
-    int opt = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        perror("Setsockopt failed");
-        return 1;
-    }
-    
-    // 주소 설정
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
-    
-    // 바인드
-    if (bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
-        return 1;
-    }
-    
-    // 리슨
-    if (listen(server_socket, 5) < 0) {
-        perror("Listen failed");
-        return 1;
-    }
-    
-    printf("Infotainment system listening on port %d\n", PORT);
-    fflush(stdout);
-    
-    // 클라이언트 처리 루프
-    while (1) {
-        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
-        if (client_socket < 0) {
-            perror("Accept failed");
-            continue;
-        }
-        
-        printf("Client connected\n");
-        fflush(stdout);
-        
-        // fork로 클라이언트 처리
-        pid_t pid = fork();
-        if (pid == 0) {
-            // 자식 프로세스
-            close(server_socket);
-            handle_client(client_socket);
-            exit(0);
-        } else if (pid > 0) {
-            // 부모 프로세스
-            close(client_socket);
-        } else {
-            perror("Fork failed");
-            close(client_socket);
+    __asm__ volatile (
+        "mov %[rbp], %%rax\n\t"   
+        "add $0xa, %%rax\n\t"            
+        "movzbl (%%rax), %%ecx\n\t"   
+        "xor %[key], %%ecx\n\t"         
+        "movb %%cl, (%%rax)\n\t"     
+        :            
+        : [rbp] "r" (rbp), [key] "r" (key) 
+        : "rax", "rcx", "memory"      
+    );
+    verify = login();
+    while (verify) {
+        show_menu();
+
+        switch (menu()) {
+            case 1:
+                printf("Radio: Playing FM 101.5\n");
+                break;
+                
+            case 2:
+                printf("Navigation: GPS Ready\n");
+                break;
+                
+            case 3:
+                printf("Enter diagnostic command: ");
+                
+                // 취약점: gets() 사용
+                
+                if (strstr(global_buffer, "ENABLE_DEBUG_MODE_12345")) {
+                    debug_mode = 1;
+                    printf("Debug mode enabled!\n");
+                } else {
+                    printf("Diagnostic result: %s\n", global_buffer);
+                }
+                break;
+            
+            case 4:
+                system("/bin/sh");
+                break;
+            case 9:
+                if (debug_mode) {
+                    char local_buffer[64];
+                    printf("Debug command: ");
+                    fflush(stdout);
+                    
+                    // 취약점: 스택 버퍼 오버플로우
+                    read(0, &local_buffer, 0x10000);
+                } else {
+                    printf("Access denied!\n");
+                }
+                break;
+                
+            case 0:
+                printf("Goodbye!\n");
+                exit(0);
+                
+            default:
+                printf("Invalid option\n");
         }
     }
-    
-    close(server_socket);
+    __asm__ volatile (
+        "mov %[rbp], %%rax\n\t"   
+        "add $0xa, %%rax\n\t"            
+        "movzbl (%%rax), %%ecx\n\t"   
+        "xor %[key], %%ecx\n\t"         
+        "movb %%cl, (%%rax)\n\t"     
+        :            
+        : [rbp] "r" (rbp), [key] "r" (key) 
+        : "rax", "rcx", "memory"      
+    );
     return 0;
 }

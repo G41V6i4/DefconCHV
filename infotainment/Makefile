@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -g -fno-stack-protector -z execstack
+CFLAGS=-Wall -g -fno-stack-protector -s -static
 TARGET=infotainment_service
 SOURCE=info.c
 

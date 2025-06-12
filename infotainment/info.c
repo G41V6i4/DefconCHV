@@ -1,20 +1,11 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <linux/can.h>
-#include <linux/can/raw.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
 
-#define PORT 1234
-#define BUFFER_SIZE 256
-
-// 취약점: 버퍼 오버플로우
 char global_buffer[64];
 int debug_mode = 0;
+int key = 0;
 
 void show_menu() {
     printf("=== Infotainment System v1.2.3 ===\n");
@@ -22,131 +13,152 @@ void show_menu() {
     printf("2. Navigation\n");
     printf("3. Diagnostics\n");
     if (debug_mode) {
-        printf("9. Debug Menu (DEV ONLY)\n");
+        printf("9. Debug Menu\n");
     }
     printf("0. Exit\n");
     printf("Choice: ");
+    fflush(stdout);
 }
 
-void debug_menu() {
-    char command[128];
-    printf("Debug mode activated!\n");
-    printf("Available commands: status, caninfo, shell\n");
-    printf("debug> ");
+void setup_environment() 
+{
+    int v1 = 0;
+    char dummy[0x10];
+    FILE *urandom;
     
-    // 취약점: 명령 인젝션
-    fgets(command, sizeof(command), stdin);
+    setvbuf(stdin, NULL, _IONBF, 0);
+    setvbuf(stdout, NULL, _IONBF, 0);
     
-    if (strncmp(command, "shell", 5) == 0) {
-        printf("Dropping to shell...\n");
-        system("/bin/bash");
-    } else if (strncmp(command, "caninfo", 7) == 0) {
-        system("ip link show vcan0");
-        system("candump vcan0 -n 10");
+    // Replace rand() with /dev/urandom
+    urandom = fopen("/dev/urandom", "r");
+    if (urandom) {
+        fread(&v1, sizeof(int), 1, urandom);
+        v1 = v1 % 0xffff;  // Keep the same range as the original
+        fclose(urandom);
+    }
+    key = v1;
+}
+
+int login()
+{
+    int idx;
+    char ch;
+    char id[0x10];
+    char pw[0x10];
+
+    puts("[*] Id: ");
+    idx = 0;
+    while (idx<0x10)
+    {
+        read(0, &ch, 1);
+        if (ch == '\n') break;
+        id[idx] = ch;
+        idx++;
+    }
+    puts("[*] Password: ");
+    idx = 0;
+    while (idx<0x10)
+    {
+        read(0, &ch, 1);
+        if (ch == '\n') break;
+        pw[idx] = ch;
+        idx++;
+    }
+
+    if(strncmp(id, "CHV", 3) == 0 && strncmp(pw, "G41V6!4", 7) == 0)
+    {
+        printf("Hello! %s\n", id);
+        return 1;
+    }
+    else
+    {
+        return 1;
     }
 }
 
-void handle_diagnostics() {
-    char input[256];
-    printf("Enter diagnostic command: ");
-    
-    // 취약점: 버퍼 오버플로우 (global_buffer는 64바이트)
-    fgets(input, sizeof(input), stdin);
-    strcpy(global_buffer, input);
-    
-    // 숨겨진 디버그 모드 활성화 코드
-    if (strstr(global_buffer, "ENABLE_DEBUG_MODE_12345") != NULL) {
-        debug_mode = 1;
-        printf("Debug mode enabled!\n");
-        return;
-    }
-    
-    printf("Diagnostic result: %s", global_buffer);
-}
-
-void send_can_message(int can_socket, int can_id, char* data, int len) {
-    struct can_frame frame;
-    frame.can_id = can_id;
-    frame.can_dlc = len;
-    memcpy(frame.data, data, len);
-    
-    write(can_socket, &frame, sizeof(struct can_frame));
+int menu()
+{
+    int sel = 0;
+    printf("> ");
+    scanf("%d", &sel);
+    return sel;
 }
 
 int main() {
-    int server_socket, client_socket;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_len = sizeof(client_addr);
+    int verify;
+    char input[256];
+    register void *rbp asm("rbp");
+    setup_environment();
     
-    // CAN 소켓 설정
-    int can_socket;
-    struct sockaddr_can can_addr;
-    struct ifreq ifr;
-    
-    can_socket = socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    strcpy(ifr.ifr_name, "vcan0");
-    ioctl(can_socket, SIOCGIFINDEX, &ifr);
-    can_addr.can_family = AF_CAN;
-    can_addr.can_ifindex = ifr.ifr_ifindex;
-    bind(can_socket, (struct sockaddr *)&can_addr, sizeof(can_addr));
-    
-    // TCP 서버 설정
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
-    
-    int opt = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
-    bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr));
-    listen(server_socket, 5);
-    
-    printf("Infotainment system listening on port %d\n", PORT);
-    
-    while (1) {
-        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_len);
-        
-        // 클라이언트별 처리 (간단하게 fork 사용)
-        if (fork() == 0) {
-            close(server_socket);
-            dup2(client_socket, STDIN_FILENO);
-            dup2(client_socket, STDOUT_FILENO);
-            dup2(client_socket, STDERR_FILENO);
-            
-            int choice;
-            while (1) {
-                show_menu();
-                scanf("%d", &choice);
-                getchar(); // 개행문자 제거
+    __asm__ volatile (
+        "mov %[rbp], %%rax\n\t"   
+        "add $0xa, %%rax\n\t"            
+        "movzbl (%%rax), %%ecx\n\t"   
+        "xor %[key], %%ecx\n\t"         
+        "movb %%cl, (%%rax)\n\t"     
+        :            
+        : [rbp] "r" (rbp), [key] "r" (key) 
+        : "rax", "rcx", "memory"      
+    );
+    verify = login();
+    while (verify) {
+        show_menu();
+
+        switch (menu()) {
+            case 1:
+                printf("Radio: Playing FM 101.5\n");
+                break;
                 
-                switch (choice) {
-                    case 1:
-                        printf("Radio: Playing FM 101.5\n");
-                        break;
-                    case 2:
-                        printf("Navigation: GPS Ready\n");
-                        break;
-                    case 3:
-                        handle_diagnostics();
-                        break;
-                    case 9:
-                        if (debug_mode) {
-                            debug_menu();
-                        } else {
-                            printf("Invalid option\n");
-                        }
-                        break;
-                    case 0:
-                        printf("Goodbye!\n");
-                        exit(0);
-                    default:
-                        printf("Invalid option\n");
+            case 2:
+                printf("Navigation: GPS Ready\n");
+                break;
+                
+            case 3:
+                printf("Enter diagnostic command: ");
+                
+                // 취약점: gets() 사용
+                
+                if (strstr(global_buffer, "ENABLE_DEBUG_MODE_12345")) {
+                    debug_mode = 1;
+                    printf("Debug mode enabled!\n");
+                } else {
+                    printf("Diagnostic result: %s\n", global_buffer);
                 }
-            }
+                break;
+            
+            case 4:
+                system("/bin/sh");
+                break;
+            case 9:
+                if (debug_mode) {
+                    char local_buffer[64];
+                    printf("Debug command: ");
+                    fflush(stdout);
+                    
+                    // 취약점: 스택 버퍼 오버플로우
+                    read(0, &local_buffer, 0x10000);
+                } else {
+                    printf("Access denied!\n");
+                }
+                break;
+                
+            case 0:
+                printf("Goodbye!\n");
+                exit(0);
+                
+            default:
+                printf("Invalid option\n");
         }
-        close(client_socket);
     }
-    
+    __asm__ volatile (
+        "mov %[rbp], %%rax\n\t"   
+        "add $0xa, %%rax\n\t"            
+        "movzbl (%%rax), %%ecx\n\t"   
+        "xor %[key], %%ecx\n\t"         
+        "movb %%cl, (%%rax)\n\t"     
+        :            
+        : [rbp] "r" (rbp), [key] "r" (key) 
+        : "rax", "rcx", "memory"      
+    );
     return 0;
 }

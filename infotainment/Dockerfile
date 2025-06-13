@@ -84,6 +84,8 @@ RUN chmod 500 /home/ecu
 RUN chmod 555 /home/ecu/infotainment_service
 RUN chmod 400 /home/ecu/flag.txt
 
+RUN sudo ln -sf "$(pwd)/cansend.py" /usr/local/bin/cansend
+RUN sudo ln -sf "$(pwd)/candump.py" /usr/local/bin/candump
 # RUN modprobe can 2>/dev/null || true
 # RUN modprobe can_raw 2>/dev/null || true  
 # RUN modprobe vcan 2>/dev/null || true

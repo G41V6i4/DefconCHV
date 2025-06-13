@@ -10,7 +10,7 @@ RUN sed -i "s/archive.ubuntu/mirror.kakao/g" /etc/apt/sources.list
 
 # 업데이트 및 필수 패키지 설치
 RUN apt update && apt upgrade -y
-RUN apt install -y xinetd gcc make
+RUN apt install -y xinetd gcc make python3
 RUN apt install -y --no-install-recommends tzdata
 
 # 타임존 설정
@@ -58,6 +58,8 @@ RUN chmod 600 /etc/shadow-
 # 소스 파일 복사 및 컴파일
 COPY info.c /tmp/info.c
 COPY Makefile /tmp/Makefile
+COPY candump.py /tmp/candump.py
+COPY cansend.py /tmp/cansend.py
 RUN cd /tmp && make clean && make
 RUN mv /tmp/infotainment_service /home/ecu/infotainment_service
 
@@ -80,18 +82,22 @@ RUN ln -s /dev/null /home/ecu/.cache
 RUN chown ecu:ecu /home/ecu
 RUN chown ecu:ecu /home/ecu/infotainment_service
 RUN chown ecu:ecu /home/ecu/flag.txt
+RUN chown ecu:ecu /tmp/cansend.py
+RUN chown ecu:ecu /tmp/candump.py
+RUN chmod 555 /tmp/cansend.py
+RUN chmod 555 /tmp/candump.py
 RUN chmod 500 /home/ecu
 RUN chmod 555 /home/ecu/infotainment_service
 RUN chmod 400 /home/ecu/flag.txt
 
-RUN sudo ln -sf "$(pwd)/cansend.py" /usr/local/bin/cansend
-RUN sudo ln -sf "$(pwd)/candump.py" /usr/local/bin/candump
+RUN ln -sf "/tmp/cansend.py" /usr/local/bin/cansend
+RUN ln -sf "/tmp/candump.py" /usr/local/bin/candump
 # RUN modprobe can 2>/dev/null || true
 # RUN modprobe can_raw 2>/dev/null || true  
 # RUN modprobe vcan 2>/dev/null || true
 # RUN ip link add dev vcan0 type vcan 2>/dev/null || true
 # RUN ip link set up vcan0 2>/dev/null || true
 # 임시 파일 정리
-RUN rm -rf /tmp/*
+#RUN rm -rf /tmp/*
 
 CMD ["/usr/sbin/xinetd", "-dontfork"]

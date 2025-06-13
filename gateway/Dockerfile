@@ -14,4 +14,6 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+EXPOSE 9999
+
 CMD ["python", "gateway.py"]

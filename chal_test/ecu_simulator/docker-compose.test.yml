@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  gateway:
+    image: ecu_gateway:latest
+    container_name: gateway_shared
+    networks:
+      - ecu_network
+    restart: unless-stopped
+    
+  engine:
+    image: ecu_engine:latest
+    container_name: engine_shared
+    networks:
+      - ecu_network
+    restart: unless-stopped
+    depends_on:
+      - gateway
+      
+  infotainment_test:
+    image: ecu_infotainment:latest
+    container_name: infotainment_test
+    networks:
+      - ecu_network
+    ports:
+      - "12340:1234"
+    depends_on:
+      - gateway
+
+networks:
+  ecu_network:
+    driver: bridge

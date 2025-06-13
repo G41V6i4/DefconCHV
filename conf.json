@@ -1,0 +1,38 @@
+{
+    "directories": [
+      "/bin",
+      "/sbin", 
+      "/etc",
+      "/tmp",
+      "/dev",
+      "/var/log",
+      "/usr/bin"
+    ],
+    "files": [
+      {
+        "path": "/etc/version",
+        "content": "ECU Firmware v2.1.4\nBuild: Production\nDate: 2024-03-15\nTarget: Infotainment System\n",
+        "permissions": "644"
+      },
+      {
+        "path": "/etc/ecu_config.conf",
+        "content": "# ECU Configuration\nDEBUG_MODE=0\nLOG_LEVEL=INFO\nCAN_INTERFACE=vcan0\nDIAG_PORT=8080\n",
+        "permissions": "600"
+      },
+      {
+        "path": "/etc/services",
+        "content": "# Network services\ndiag\t\t8080/tcp\t# Diagnostic service\ninfotainment\t9090/tcp\t# Infotainment service\n",
+        "permissions": "644"
+      },
+      {
+        "path": "/bin/startup.sh",
+        "content": "#!/bin/sh\n# ECU Startup Script\necho \"Starting ECU services...\"\n/sbin/infotainment_service &\n/sbin/diag_service &\necho \"ECU ready\"\n",
+        "permissions": "755"
+      },
+      {
+        "path": "/etc/build_info.txt",
+        "content": "Build Configuration:\n- Compiler: aarch64-linux-gnu-gcc\n- Optimization: -O2\n- Debug symbols: stripped\n- Features: CAN, UDS, OBD-II\n",
+        "permissions": "644"
+      }
+    ]
+  }

@@ -12,6 +12,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./firmware:/opt/ctf/firmware
     privileged: true
+    networks:
+      - default
+      - ecu_shared_network  # 이 라인 추가
     depends_on:
       - gateway-shared
       - engine-shared
@@ -24,6 +27,8 @@ services:
     container_name: gateway_shared
     networks:
       - ecu_shared_network
+    ports:
+      - "9999:9999"
     cap_add:
       - NET_ADMIN
     restart: unless-stopped
@@ -48,3 +53,4 @@ networks:
   ecu_shared_network:
     driver: bridge
     name: ecu_shared_network
+    #external: true

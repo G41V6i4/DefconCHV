@@ -39,14 +39,70 @@ def cleanup_session(session_id):
 SHARED_NETWORK = "ecu_shared_network"
 SHARED_CONTAINERS = ["gateway_shared", "engine_shared"]
 
-def wait_for_can_broker():
+def get_can_broker_host():
+    """CAN 브로커 호스트 주소 반환"""
+    # Flask 앱이 같은 Docker 네트워크에 있는지 확인
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex(('gateway_shared', 9999))
+        sock.close()
+        if result == 0:
+            return 'gateway_shared'
+    except:
+        pass
+    
+    # 호스트에서 실행 중이면 localhost 사용
+    return 'localhost'
     """CAN 브로커가 준비될 때까지 대기"""
     max_attempts = 30
     for attempt in range(max_attempts):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
-            result = sock.connect_ex(('localhost', 9999))
+            
+            # Flask 앱이 컨테이너에서 실행 중인지 호스트에서 실행 중인지 확인
+            try:
+                # 먼저 컨테이너 이름으로 시도 (Flask가 같은 네트워크의 컨테이너에서 실행될 때)
+                result = sock.connect_ex(('gateway_shared', 9999))
+                if result == 0:
+                    sock.close()
+                    print("CAN broker is ready (container network)")
+                    return True
+            except:
+                pass
+            
+            sock.close()
+            
+            # 컨테이너 이름 연결 실패 시 localhost 시도 (Flask가 호스트에서 실행될 때)
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(1)
+                result = sock.connect_ex(('localhost', 9999))
+                sock.close()
+                
+                if result == 0:
+                    print("CAN broker is ready (localhost)")
+                    return True
+            except:
+                pass
+                
+        except Exception:
+            pass
+            
+        time.sleep(1)
+        
+    print("CAN broker failed to start")
+    return False
+def wait_for_can_broker():
+    """CAN 브로커가 준비될 때까지 대기"""
+    broker_host = get_can_broker_host()
+    max_attempts = 30
+    for attempt in range(max_attempts):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            result = sock.connect_ex((broker_host, 9999))
             sock.close()
             
             if result == 0:
@@ -60,7 +116,6 @@ def wait_for_can_broker():
         
     print("CAN broker failed to start")
     return False
-
 def ensure_shared_infrastructure():
     """공유 인프라스트럭처 확인 및 생성"""
     try:
@@ -324,11 +379,12 @@ def can_broker_status():
     """CAN 브로커 상태 확인"""
     try:
         # CAN 브로커에 상태 요청
+        broker_host = get_can_broker_host()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
         
         # 브로커 연결 테스트
-        result = sock.connect_ex(('localhost', 9999))
+        result = sock.connect_ex((broker_host, 9999))
         sock.close()
         
         if result == 0:
@@ -346,6 +402,7 @@ def can_broker_status():
         return jsonify({
             "broker_status": broker_status,
             "gateway_container": gateway_status,
+            "broker_host": broker_host,
             "port": 9999
         })
         
@@ -371,7 +428,7 @@ def can_broker_logs():
             # CAN 브로커 관련 로그만 필터링
             broker_logs = []
             for line in logs:
-                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing']):
+                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN message']):
                     broker_logs.append(line)
             
             return jsonify({
@@ -407,7 +464,7 @@ def can_broker_logs_live():
             )
             
             for line in iter(process.stdout.readline, ''):
-                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing']):
+                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN message']):
                     yield f"data: {json.dumps({'log': line.strip(), 'timestamp': time.time()})}\n\n"
                     
         except Exception as e:

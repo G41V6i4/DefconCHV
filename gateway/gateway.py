@@ -1,114 +1,252 @@
-import can
-import struct
+import socket
+import threading
+import json
 import time
-import hashlib
-from threading import Thread
+import struct
+from collections import defaultdict
 
-class GatewayECU:
-    def __init__(self):
-        self.bus = can.interface.Bus(channel='vcan0', bustype='socketcan')
-        self.authenticated_sessions = {}
-        self.session_timeout = 300  # 5분
-        
-    def generate_seed(self):
-        """취약한 시드 생성 - 시간 기반으로 예측 가능"""
-        return int(time.time()) & 0xFFFF
+class CANMessage:
+    """CAN 메시지 구조체"""
+    def __init__(self, can_id, data, timestamp=None):
+        self.can_id = can_id
+        self.data = data
+        self.timestamp = timestamp or time.time()
     
-    def calculate_key(self, seed):
-        """취약한 키 계산 - 간단한 XOR 연산"""
-        return seed ^ 0x1337
+    def to_dict(self):
+        return {
+            'can_id': self.can_id,
+            'data': self.data.hex() if isinstance(self.data, bytes) else self.data,
+            'timestamp': self.timestamp
+        }
     
-    def handle_security_access(self, data):
-        """보안 접근 처리"""
-        if len(data) < 2:
-            return None
-            
-        subfunc = data[1]
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            can_id=data['can_id'],
+            data=bytes.fromhex(data['data']) if isinstance(data['data'], str) else data['data'],
+            timestamp=data.get('timestamp', time.time())
+        )
+
+class CANBroker:
+    """CAN 메시지 브로커 - 세션별 메시지 라우팅"""
+    
+    def __init__(self, host='0.0.0.0', port=9999):
+        self.host = host
+        self.port = port
+        self.sessions = {}  # session_id -> {'socket': socket, 'type': 'infotainment/engine'}
+        self.message_queues = defaultdict(list)  # session_id -> [messages]
+        self.gateway_state = {}  # 게이트웨이 상태 (인증된 세션 등)
+        self.running = False
         
-        if subfunc == 0x01:  # Request Seed
-            seed = self.generate_seed()
-            session_id = data[0] if len(data) > 0 else 0x01
+    def start(self):
+        """브로커 서버 시작"""
+        self.running = True
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(10)
+        
+        print(f"CAN Broker started on {self.host}:{self.port}")
+        
+        while self.running:
+            try:
+                client_socket, addr = self.server_socket.accept()
+                thread = threading.Thread(
+                    target=self.handle_client,
+                    args=(client_socket, addr)
+                )
+                thread.daemon = True
+                thread.start()
+            except Exception as e:
+                if self.running:
+                    print(f"Error accepting connection: {e}")
+    
+    def handle_client(self, client_socket, addr):
+        """클라이언트 연결 처리"""
+        session_id = None
+        try:
+            # 초기 핸드셰이크 - 세션 등록
+            data = client_socket.recv(1024).decode()
+            handshake = json.loads(data)
             
-            # 세션에 시드 저장
-            self.authenticated_sessions[session_id] = {
-                'seed': seed,
-                'authenticated': False,
+            session_id = handshake['session_id']
+            client_type = handshake['type']  # 'infotainment' or 'engine'
+            
+            self.sessions[session_id] = {
+                'socket': client_socket,
+                'type': client_type,
+                'addr': addr
+            }
+            
+            # 핸드셰이크 응답
+            response = {'status': 'connected', 'session_id': session_id}
+            client_socket.send(json.dumps(response).encode() + b'\n')
+            
+            print(f"Session {session_id} ({client_type}) connected from {addr}")
+            
+            # 메시지 수신 루프
+            buffer = ""
+            while self.running:
+                data = client_socket.recv(1024).decode()
+                if not data:
+                    break
+                
+                buffer += data
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    if line.strip():
+                        self.process_message(session_id, line.strip())
+                        
+        except Exception as e:
+            print(f"Error handling client {addr}: {e}")
+        finally:
+            if session_id and session_id in self.sessions:
+                del self.sessions[session_id]
+                print(f"Session {session_id} disconnected")
+            client_socket.close()
+    
+    def process_message(self, session_id, message):
+        """CAN 메시지 처리 및 라우팅"""
+        try:
+            msg_data = json.loads(message)
+            
+            if msg_data['type'] == 'send':
+                # CAN 메시지 전송
+                can_msg = CANMessage(
+                    can_id=msg_data['can_id'],
+                    data=bytes.fromhex(msg_data['data'])
+                )
+                self.route_message(session_id, can_msg)
+                
+            elif msg_data['type'] == 'dump_start':
+                # candump 시작 - 큐에 쌓인 메시지들 전송
+                self.send_queued_messages(session_id)
+                
+        except Exception as e:
+            print(f"Error processing message from {session_id}: {e}")
+    
+    def route_message(self, sender_session, can_msg):
+        """메시지 라우팅 로직"""
+        sender_info = self.sessions.get(sender_session)
+        if not sender_info:
+            return
+        
+        # 게이트웨이 로직
+        if sender_info['type'] == 'infotainment':
+            # 인포테인먼트에서 온 메시지
+            if can_msg.can_id == 0x123:  # 게이트웨이와의 통신
+                # 게이트웨이 인증 처리
+                response = self.handle_gateway_auth(sender_session, can_msg)
+                if response:
+                    self.send_to_session(sender_session, response)
+            
+            elif can_msg.can_id == 0x456 and self.is_authenticated(sender_session):
+                # 인증된 세션만 엔진 ECU에 접근 가능
+                self.forward_to_engine(sender_session, can_msg)
+        
+        elif sender_info['type'] == 'engine':
+            # 엔진에서 온 응답 메시지 - 원래 요청한 세션으로 전달
+            target_session = self.find_target_session(can_msg)
+            if target_session:
+                self.send_to_session(target_session, can_msg)
+    
+    def handle_gateway_auth(self, session_id, can_msg):
+        """게이트웨이 인증 처리"""
+        if len(can_msg.data) >= 4:
+            # 간단한 시드-키 알고리즘 (취약점 포함)
+            seed = struct.unpack('>I', can_msg.data[:4])[0]
+            key = (seed ^ 0xDEADBEEF) & 0xFFFFFFFF  # 예측 가능한 키 생성
+            
+            # 세션 인증 상태 업데이트
+            self.gateway_state[session_id] = {
+                'authenticated': True,
                 'timestamp': time.time()
             }
             
-            return bytes([0x67, 0x01]) + struct.pack('>H', seed)
-            
-        elif subfunc == 0x02:  # Send Key
-            if len(data) < 4:
-                return bytes([0x7F, 0x27, 0x13])  # Incorrect message length
-                
-            session_id = data[0] if len(data) > 2 else 0x01
-            provided_key = struct.unpack('>H', data[2:4])[0]
-            
-            if session_id in self.authenticated_sessions:
-                session = self.authenticated_sessions[session_id]
-                expected_key = self.calculate_key(session['seed'])
-                
-                if provided_key == expected_key:
-                    session['authenticated'] = True
-                    return bytes([0x67, 0x02])
-                else:
-                    return bytes([0x7F, 0x27, 0x35])  # Invalid key
-            else:
-                return bytes([0x7F, 0x27, 0x24])  # Request sequence error
-    
-    def handle_routine_control(self, data):
-        """루틴 제어 처리"""
-        if len(data) < 4:
-            return bytes([0x7F, 0x31, 0x13])
-            
-        session_id = data[0] if len(data) > 0 else 0x01
+            # 인증 성공 응답
+            response_data = struct.pack('>I', key)
+            return CANMessage(can_id=0x124, data=response_data)
         
-        # 인증 확인
-        if session_id not in self.authenticated_sessions or \
-           not self.authenticated_sessions[session_id]['authenticated']:
-            return bytes([0x7F, 0x31, 0x33])  # Security access denied
-            
-        subfunc = data[1]
-        routine_id = struct.unpack('>H', data[2:4])[0]
-        
-        if subfunc == 0x01 and routine_id == 0x1234:  # Start routine
-            # 엔진 ECU로 메시지 전달
-            engine_msg = can.Message(arbitration_id=0x700, data=[0x10, 0x03])
-            self.bus.send(engine_msg)
-            return bytes([0x71, 0x01, 0x12, 0x34])
-            
-        return bytes([0x7F, 0x31, 0x31])  # Request out of range
+        return None
     
-    def process_message(self, msg):
-        """CAN 메시지 처리"""
-        if msg.arbitration_id == 0x123:  # Infotainment to Gateway
-            if len(msg.data) >= 2:
-                service = msg.data[0]
-                
-                response_data = None
-                if service == 0x27:  # Security Access
-                    response_data = self.handle_security_access(msg.data)
-                elif service == 0x31:  # Routine Control
-                    response_data = self.handle_routine_control(msg.data)
-                
-                if response_data:
-                    response_msg = can.Message(
-                        arbitration_id=0x124,  # Gateway to Infotainment
-                        data=response_data
-                    )
-                    self.bus.send(response_msg)
-    
-    def run(self):
-        """메인 루프"""
-        print("Gateway ECU started")
+    def is_authenticated(self, session_id):
+        """세션 인증 상태 확인"""
+        auth_info = self.gateway_state.get(session_id)
+        if not auth_info:
+            return False
         
-        for msg in self.bus:
-            try:
-                self.process_message(msg)
-            except Exception as e:
-                print(f"Error processing message: {e}")
+        # 인증 타임아웃 (5분)
+        if time.time() - auth_info['timestamp'] > 300:
+            del self.gateway_state[session_id]
+            return False
+        
+        return auth_info['authenticated']
+    
+    def forward_to_engine(self, session_id, can_msg):
+        """엔진 ECU로 메시지 전달"""
+        # 엔진 ECU 세션 찾기
+        engine_session = None
+        for sid, info in self.sessions.items():
+            if info['type'] == 'engine':
+                engine_session = sid
+                break
+        
+        if engine_session:
+            # 메시지에 원본 세션 정보 추가
+            modified_msg = {
+                'type': 'forward',
+                'original_session': session_id,
+                'can_id': can_msg.can_id,
+                'data': can_msg.data.hex(),
+                'timestamp': can_msg.timestamp
+            }
+            self.send_raw_message(engine_session, json.dumps(modified_msg))
+    
+    def send_to_session(self, session_id, can_msg):
+        """특정 세션에 CAN 메시지 전송"""
+        if session_id in self.sessions:
+            msg_data = {
+                'type': 'receive',
+                'can_id': can_msg.can_id,
+                'data': can_msg.data.hex(),
+                'timestamp': can_msg.timestamp
+            }
+            self.send_raw_message(session_id, json.dumps(msg_data))
+        else:
+            # 세션이 없으면 큐에 저장
+            self.message_queues[session_id].append(can_msg)
+    
+    def send_raw_message(self, session_id, message):
+        """raw 메시지 전송"""
+        try:
+            socket_obj = self.sessions[session_id]['socket']
+            socket_obj.send((message + '\n').encode())
+        except Exception as e:
+            print(f"Error sending message to {session_id}: {e}")
+    
+    def send_queued_messages(self, session_id):
+        """큐에 쌓인 메시지들 전송"""
+        if session_id in self.message_queues:
+            for can_msg in self.message_queues[session_id]:
+                self.send_to_session(session_id, can_msg)
+            self.message_queues[session_id].clear()
+    
+    def find_target_session(self, can_msg):
+        """엔진 응답의 타겟 세션 찾기"""
+        # 실제로는 메시지 내용을 파싱해서 원본 세션 ID 추출
+        # 여기서는 간단히 구현
+        return None
+    
+    def stop(self):
+        """브로커 종료"""
+        self.running = False
+        if hasattr(self, 'server_socket'):
+            self.server_socket.close()
 
 if __name__ == "__main__":
-    gateway = GatewayECU()
-    gateway.run()
+    broker = CANBroker()
+    try:
+        broker.start()
+    except KeyboardInterrupt:
+        print("\nShutting down CAN broker...")
+        broker.stop()

@@ -1,6 +1,0 @@
-python-can==4.2.2          # CAN 통신 라이브러리
-websockets==11.0.3         # WebSocket 서버
-asyncio                    # 비동기 처리
-aiohttp==3.8.5            # HTTP 서버
-pyyaml==6.0               # 설정 파일 파싱
-cryptography==41.0.4      # 암호화 기능

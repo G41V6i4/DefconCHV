@@ -29,8 +29,7 @@ class UDSSecurityManager:
         
         self.security_levels = {
             0x01: {'name': 'Basic Diagnostic', 'unlocked': False, 'attempts': 0, 'last_attempt': 0},
-            0x03: {'name': 'Advanced Functions', 'unlocked': False, 'attempts': 0, 'last_attempt': 0},
-            0x05: {'name': 'Critical Systems', 'unlocked': False, 'attempts': 0, 'last_attempt': 0}
+            0x03: {'name': 'Advanced Functions', 'unlocked': False, 'attempts': 0, 'last_attempt': 0}
         }
         
         self.active_seeds = {}
@@ -49,12 +48,6 @@ class UDSSecurityManager:
             session_time = int(time.time() - self.session_start_time)
             time_factor = (current_time ^ session_time) & 0xFFFF
             seed = (base_seed ^ (time_factor << 8) ^ 0xCAFEBABE) & 0xFFFFFFFF
-            
-        elif level == 0x05:
-            base_seed = self.prng.next()
-            complex_time = ((current_time >> 2) ^ (current_time << 3)) & 0xFFFF
-            session_factor = hash(self.session_id) & 0xFFFF
-            seed = (base_seed ^ complex_time ^ (session_factor << 16) ^ 0xDEADC0DE) & 0xFFFFFFFF
             
         else:
             return None
@@ -128,17 +121,6 @@ class UDSSecurityManager:
             step3 = step2 + ((timestamp & 0xFFFF) * 0x9E3779B9)
             return step3 & 0xFFFFFFFF
             
-        elif level == 0x05:
-            data = struct.pack('>II', seed, timestamp)
-            hash_obj = hashlib.md5(data + self.session_id.encode())
-            hash_bytes = hash_obj.digest()[:4]
-            base_key = struct.unpack('>I', hash_bytes)[0]
-            
-            transform1 = ((base_key ^ 0x12345678) * 0x41C64E6D) & 0xFFFFFFFF
-            transform2 = ((transform1 + 0x3039) >> 1) & 0xFFFFFFFF
-            
-            return transform2
-            
         return 0
     
     def is_level_accessible(self, level):
@@ -155,15 +137,11 @@ class UDSSecurityManager:
         if level == 0x03 and not self.security_levels[0x01]['unlocked']:
             return False, "Level 1 access required first"
             
-        if level == 0x05 and not self.security_levels[0x03]['unlocked']:
-            return False, "Level 3 access required first"
-            
         return True, "Access permitted"
 
 class CANMessage:
     def __init__(self, can_id, data, timestamp=None):
         self.can_id = can_id
-        # CAN 데이터 길이 검증 (최대 8바이트)
         if isinstance(data, bytes) and len(data) > 8:
             raise ValueError(f"CAN data too long: {len(data)} bytes (max 8)")
         self.data = data
@@ -320,7 +298,6 @@ class CANBroker:
             if msg_type == 'send':
                 can_data = bytes.fromhex(msg_data['data'])
                 
-                # CAN 데이터 길이 검증
                 if len(can_data) > 8:
                     self.logger.error(f"[{session_id}] CAN data too long: {len(can_data)} bytes")
                     return
@@ -384,8 +361,7 @@ class CANBroker:
             self.send_uds_error(session_id, 0x27, 0x22)
             return
         
-        if sub_function in [0x01, 0x03, 0x05]:
-            # 시드 요청
+        if sub_function in [0x01, 0x03]:
             accessible, message = security_manager.is_level_accessible(sub_function)
             if not accessible:
                 self.logger.warning(f"[{session_id}] Security access denied for level 0x{sub_function:02X}: {message}")
@@ -394,33 +370,27 @@ class CANBroker:
                 
             seed = security_manager.generate_seed(sub_function)
             if seed is not None:
-                # 시드 응답을 두 개의 CAN 프레임으로 나누어 전송
-                # 첫 번째 프레임: PCI, SID, Sub-function, Seed 상위 2바이트
                 response1_data = struct.pack('>BBBH', 0x10, 0x67, sub_function, (seed >> 16) & 0xFFFF)
-                response1_data += b'\x00\x00\x00'  # 패딩
+                response1_data += b'\x00\x00\x00'
                 response1 = CANMessage(can_id=0x7E8, data=response1_data[:8])
                 
-                # 두 번째 프레임: 연속 프레임, Seed 하위 2바이트
                 response2_data = struct.pack('>BH', 0x21, seed & 0xFFFF)
-                response2_data += b'\x00\x00\x00\x00\x00'  # 패딩
+                response2_data += b'\x00\x00\x00\x00\x00'
                 response2 = CANMessage(can_id=0x7E8, data=response2_data[:8])
                 
                 self.send_to_session(session_id, response1)
-                time.sleep(0.01)  # 작은 지연
+                time.sleep(0.01)
                 self.send_to_session(session_id, response2)
                 
                 self.logger.info(f"[{session_id}] Sent seed for level 0x{sub_function:02X}: 0x{seed:08X} (multi-frame)")
             else:
                 self.send_uds_error(session_id, 0x27, 0x31)
                 
-        elif sub_function in [0x02, 0x04, 0x06]:
-            # 키 전송 (멀티프레임으로 수신)
-            # 이 예제에서는 단일 프레임으로 가정 (실제로는 ISO-TP 구현 필요)
+        elif sub_function in [0x02, 0x04]:
             if len(data) < 7:
                 self.send_uds_error(session_id, 0x27, 0x13)
                 return
                 
-            # 키 추출 (data[3:7])
             provided_key = struct.unpack('>I', data[3:7])[0]
             level = sub_function - 1
             
@@ -428,7 +398,7 @@ class CANBroker:
             
             if success:
                 response_data = struct.pack('>BBB', 0x03, 0x67, sub_function)
-                response_data += b'\x00\x00\x00\x00\x00'  # 패딩
+                response_data += b'\x00\x00\x00\x00\x00'
                 response = CANMessage(can_id=0x7E8, data=response_data[:8])
                 self.send_to_session(session_id, response)
                 self.logger.info(f"[{session_id}] Security access granted for level 0x{level:02X}")
@@ -447,7 +417,7 @@ class CANBroker:
             self.logger.warning(f"No security manager for {session_id}")
             return
             
-        if not security_manager.security_levels[0x05]['unlocked']:
+        if not security_manager.security_levels[0x03]['unlocked']:
             self.logger.warning(f"[{session_id}] Unauthorized engine access attempt")
             error_response = CANMessage(can_id=0x7E8, data=bytes([0x03, 0x7F, 0x22, 0x33, 0x00, 0x00, 0x00, 0x00]))
             self.send_to_session(session_id, error_response)
@@ -458,7 +428,7 @@ class CANBroker:
     
     def send_uds_error(self, session_id, service_id, error_code):
         error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
-        error_data += b'\x00\x00\x00\x00'  # 패딩
+        error_data += b'\x00\x00\x00\x00'
         error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
         self.send_to_session(session_id, error_response)
         
@@ -477,23 +447,18 @@ class CANBroker:
         self.logger.info(f"[{session_id}] UDS Error: {error_name}")
     
     def forward_to_engine(self, session_id, can_msg):
-        # 엔진 ECU 응답 시뮬레이션
-        if len(can_msg.data) >= 3 and can_msg.data[1] == 0x22:  # Read Data By Identifier
-            # 플래그 응답 생성
+        if len(can_msg.data) >= 3 and can_msg.data[1] == 0x22:
             flag_data = b"FLAG{ECU_HACKED_2024}"
             
-            # 멀티프레임으로 플래그 전송
-            total_length = len(flag_data) + 3  # 3바이트 헤더 포함
+            total_length = len(flag_data) + 3
             
-            # 첫 번째 프레임
             first_frame = struct.pack('>BB', 0x10 | (total_length >> 8), total_length & 0xFF)
-            first_frame += struct.pack('>BB', 0x62, 0xF1)  # Positive response + DID
-            first_frame += flag_data[:4]  # 처음 4바이트
+            first_frame += struct.pack('>BB', 0x62, 0xF1)
+            first_frame += flag_data[:4]
             
             response1 = CANMessage(can_id=0x458, data=first_frame)
             self.send_to_session(session_id, response1)
             
-            # 연속 프레임들
             remaining_data = flag_data[4:]
             frame_counter = 1
             
@@ -501,7 +466,7 @@ class CANBroker:
                 frame_data = struct.pack('>B', 0x20 | frame_counter)
                 chunk = remaining_data[:7]
                 frame_data += chunk
-                frame_data += b'\x00' * (8 - len(frame_data))  # 패딩
+                frame_data += b'\x00' * (8 - len(frame_data))
                 
                 response = CANMessage(can_id=0x458, data=frame_data)
                 time.sleep(0.01)
@@ -578,7 +543,7 @@ class CANBroker:
         if security_stats:
             self.logger.info(f"Security Stats: {len(security_stats)} sessions with security managers")
             for session_id, stats in security_stats.items():
-                self.logger.debug(f"  {session_id}: {stats['unlocked_levels']}/3 levels unlocked, {stats['total_attempts']} attempts, PRNG: {stats['prng_counter']}")
+                self.logger.debug(f"  {session_id}: {stats['unlocked_levels']}/2 levels unlocked, {stats['total_attempts']} attempts, PRNG: {stats['prng_counter']}")
     
     def stop(self):
         self.logger.info("Stopping Advanced CAN Broker...")

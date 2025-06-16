@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#define SECURITY_MASK 0xA5A5A5A5
 
 char global_buffer[64];
 int debug_mode = 0;

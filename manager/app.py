@@ -428,7 +428,7 @@ def can_broker_logs():
             # CAN 브로커 관련 로그만 필터링
             broker_logs = []
             for line in logs:
-                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN message']):
+                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN from', 'key', 'Generated', 'Sent', 'Security','Error']):
                     broker_logs.append(line)
             
             return jsonify({
@@ -464,7 +464,7 @@ def can_broker_logs_live():
             )
             
             for line in iter(process.stdout.readline, ''):
-                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN message']):
+                if any(keyword in line for keyword in ['CANBroker', 'CAN Broker', 'Session', 'Gateway auth', 'Routing', 'CAN from', 'key', 'Generated', 'Sent', 'Security','Error']):
                     yield f"data: {json.dumps({'log': line.strip(), 'timestamp': time.time()})}\n\n"
                     
         except Exception as e:

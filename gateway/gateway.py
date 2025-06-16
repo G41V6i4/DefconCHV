@@ -1,21 +1,171 @@
 #!/usr/bin/env python3
-"""
-CAN Message Broker for ECU Simulator
-게이트웨이 ECU에 내장되어 세션별 CAN 메시지 라우팅을 담당
-"""
+
 import socket
 import threading
 import json
 import time
 import struct
 import logging
+import hashlib
 from collections import defaultdict
-from datetime import datetime
+
+class SessionPRNG:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        seed = int(hashlib.md5(session_id.encode()).hexdigest()[:8], 16)
+        self.state = seed ^ 0x12345678
+        self.counter = 0
+        
+    def next(self):
+        self.counter += 1
+        self.state = ((self.state * 1103515245 + 12345) & 0x7FFFFFFF)
+        return self.state
+
+class UDSSecurityManager:
+    def __init__(self, session_id, logger):
+        self.session_id = session_id
+        self.logger = logger
+        self.prng = SessionPRNG(session_id)
+        
+        self.security_levels = {
+            0x01: {'name': 'Basic Diagnostic', 'unlocked': False, 'attempts': 0, 'last_attempt': 0},
+            0x03: {'name': 'Advanced Functions', 'unlocked': False, 'attempts': 0, 'last_attempt': 0},
+            0x05: {'name': 'Critical Systems', 'unlocked': False, 'attempts': 0, 'last_attempt': 0}
+        }
+        
+        self.active_seeds = {}
+        self.session_start_time = time.time()
+        
+    def generate_seed(self, level):
+        current_time = int(time.time())
+        
+        if level == 0x01:
+            base_seed = self.prng.next()
+            time_factor = current_time & 0xFF
+            seed = (base_seed ^ (time_factor << 16)) & 0xFFFFFFFF
+            
+        elif level == 0x03:
+            base_seed = self.prng.next()
+            session_time = int(time.time() - self.session_start_time)
+            time_factor = (current_time ^ session_time) & 0xFFFF
+            seed = (base_seed ^ (time_factor << 8) ^ 0xCAFEBABE) & 0xFFFFFFFF
+            
+        elif level == 0x05:
+            base_seed = self.prng.next()
+            complex_time = ((current_time >> 2) ^ (current_time << 3)) & 0xFFFF
+            session_factor = hash(self.session_id) & 0xFFFF
+            seed = (base_seed ^ complex_time ^ (session_factor << 16) ^ 0xDEADC0DE) & 0xFFFFFFFF
+            
+        else:
+            return None
+            
+        self.active_seeds[level] = {
+            'seed': seed,
+            'timestamp': current_time,
+            'attempts': 0
+        }
+        
+        self.logger.info(f"[{self.session_id}] Generated seed for level 0x{level:02X}: 0x{seed:08X}")
+        return seed
+    
+    def verify_key(self, level, provided_key):
+        if level not in self.active_seeds:
+            self.logger.warning(f"[{self.session_id}] No active seed for level 0x{level:02X}")
+            return False, "Invalid security access sequence"
+            
+        seed_info = self.active_seeds[level]
+        seed = seed_info['seed']
+        seed_timestamp = seed_info['timestamp']
+        
+        seed_info['attempts'] += 1
+        self.security_levels[level]['attempts'] += 1
+        
+        current_time = int(time.time())
+        
+        if current_time - seed_timestamp > 10:
+            del self.active_seeds[level]
+            self.logger.warning(f"[{self.session_id}] Seed timeout for level 0x{level:02X}")
+            return False, "Security access timeout"
+            
+        if seed_info['attempts'] > 3:
+            del self.active_seeds[level]
+            self.security_levels[level]['last_attempt'] = current_time
+            self.logger.warning(f"[{self.session_id}] Too many attempts for level 0x{level:02X}")
+            return False, "Security access denied - too many attempts"
+            
+        expected_key = self.calculate_key(level, seed, seed_timestamp)
+        
+        verification_start = time.perf_counter()
+        
+        key_match = (provided_key == expected_key)
+        
+        if not key_match:
+            high_nibbles_match = (provided_key >> 16) == (expected_key >> 16)
+            if high_nibbles_match:
+                time.sleep(0.05)
+        else:
+            time.sleep(0.02)
+            
+        verification_time = time.perf_counter() - verification_start
+        
+        if key_match:
+            self.security_levels[level]['unlocked'] = True
+            del self.active_seeds[level]
+            self.security_levels[level]['last_attempt'] = current_time
+            self.logger.info(f"[{self.session_id}] Security level 0x{level:02X} unlocked (verification: {verification_time:.4f}s)")
+            return True, "Security access granted"
+        else:
+            self.logger.warning(f"[{self.session_id}] Invalid key for level 0x{level:02X}: got 0x{provided_key:08X}, expected 0x{expected_key:08X} (verification: {verification_time:.4f}s)")
+            return False, "Invalid key"
+    
+    def calculate_key(self, level, seed, timestamp):
+        if level == 0x01:
+            return ((seed ^ 0xA5A5A5A5) + (timestamp & 0xFF)) & 0xFFFFFFFF
+            
+        elif level == 0x03:
+            step1 = seed ^ 0x5A5A5A5A
+            step2 = ((step1 << 3) | (step1 >> 29)) & 0xFFFFFFFF
+            step3 = step2 + ((timestamp & 0xFFFF) * 0x9E3779B9)
+            return step3 & 0xFFFFFFFF
+            
+        elif level == 0x05:
+            data = struct.pack('>II', seed, timestamp)
+            hash_obj = hashlib.md5(data + self.session_id.encode())
+            hash_bytes = hash_obj.digest()[:4]
+            base_key = struct.unpack('>I', hash_bytes)[0]
+            
+            transform1 = ((base_key ^ 0x12345678) * 0x41C64E6D) & 0xFFFFFFFF
+            transform2 = ((transform1 + 0x3039) >> 1) & 0xFFFFFFFF
+            
+            return transform2
+            
+        return 0
+    
+    def is_level_accessible(self, level):
+        current_time = int(time.time())
+        level_info = self.security_levels.get(level)
+        
+        if not level_info:
+            return False, "Unknown security level"
+            
+        if level_info['last_attempt'] > 0 and current_time - level_info['last_attempt'] < 30:
+            remaining = 30 - (current_time - level_info['last_attempt'])
+            return False, f"Security lockout active - {remaining}s remaining"
+            
+        if level == 0x03 and not self.security_levels[0x01]['unlocked']:
+            return False, "Level 1 access required first"
+            
+        if level == 0x05 and not self.security_levels[0x03]['unlocked']:
+            return False, "Level 3 access required first"
+            
+        return True, "Access permitted"
 
 class CANMessage:
-    """CAN 메시지 구조체"""
     def __init__(self, can_id, data, timestamp=None):
         self.can_id = can_id
+        # CAN 데이터 길이 검증 (최대 8바이트)
+        if isinstance(data, bytes) and len(data) > 8:
+            raise ValueError(f"CAN data too long: {len(data)} bytes (max 8)")
         self.data = data
         self.timestamp = timestamp or time.time()
     
@@ -25,46 +175,32 @@ class CANMessage:
             'data': self.data.hex() if isinstance(self.data, bytes) else self.data,
             'timestamp': self.timestamp
         }
-    
-    @classmethod
-    def from_dict(cls, data):
-        return cls(
-            can_id=data['can_id'],
-            data=bytes.fromhex(data['data']) if isinstance(data['data'], str) else data['data'],
-            timestamp=data.get('timestamp', time.time())
-        )
 
 class CANBroker:
-    """CAN 메시지 브로커 - 세션별 메시지 라우팅"""
-    
     def __init__(self, host='0.0.0.0', port=9999):
         self.host = host
         self.port = port
-        self.sessions = {}  # session_id -> {'socket': socket, 'type': 'infotainment/engine'}
-        self.message_queues = defaultdict(list)  # session_id -> [messages]
-        self.gateway_state = {}  # 게이트웨이 상태 (인증된 세션 등)
+        self.sessions = {}
+        self.message_queues = defaultdict(list)
+        self.security_managers = {}
         self.running = False
         
-        # 로깅 설정
         self.setup_logging()
         
     def setup_logging(self):
-        """로깅 설정"""
-        # 로그 포맷 설정
         log_format = '%(asctime)s [%(levelname)s] %(message)s'
         logging.basicConfig(
             level=logging.INFO,
             format=log_format,
             handlers=[
-                logging.StreamHandler(),  # 콘솔 출력
-                logging.FileHandler('/tmp/can_broker.log')  # 파일 저장
+                logging.StreamHandler(),
+                logging.FileHandler('/tmp/can_broker.log')
             ]
         )
         self.logger = logging.getLogger('CANBroker')
-        self.logger.info("CAN Broker logging initialized")
+        self.logger.info("Advanced CAN Broker with UDS Security initialized")
         
     def start(self):
-        """브로커 서버 시작"""
         self.running = True
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -72,9 +208,8 @@ class CANBroker:
         try:
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(10)
-            self.logger.info(f"CAN Broker started on {self.host}:{self.port}")
+            self.logger.info(f"Advanced CAN Broker started on {self.host}:{self.port}")
             
-            # 통계 쓰레드 시작
             stats_thread = threading.Thread(target=self.stats_reporter, daemon=True)
             stats_thread.start()
             
@@ -99,18 +234,13 @@ class CANBroker:
             raise
     
     def handle_client(self, client_socket, addr):
-        """클라이언트 연결 처리"""
         session_id = None
         client_type = None
         
         try:
-            # 소켓 타임아웃 설정
             client_socket.settimeout(60)
             
-            # 초기 핸드셰이크 - 세션 등록
-            self.logger.info(f"Waiting for handshake from {addr}")
             data = client_socket.recv(1024).decode()
-            
             if not data:
                 self.logger.warning(f"Empty handshake from {addr}")
                 return
@@ -119,11 +249,10 @@ class CANBroker:
             session_id = handshake['session_id']
             client_type = handshake['type']
             
-            self.logger.info(f"Handshake received: session={session_id}, type={client_type}, addr={addr}")
+            self.logger.info(f"Handshake: session={session_id}, type={client_type}, addr={addr}")
             
-            # 중복 세션 체크
             if session_id in self.sessions:
-                self.logger.warning(f"Duplicate session {session_id} from {addr}, replacing existing")
+                self.logger.warning(f"Replacing existing session {session_id}")
                 old_socket = self.sessions[session_id]['socket']
                 try:
                     old_socket.close()
@@ -139,20 +268,20 @@ class CANBroker:
                 'message_count': 0
             }
             
-            # 핸드셰이크 응답
+            if session_id not in self.security_managers:
+                self.security_managers[session_id] = UDSSecurityManager(session_id, self.logger)
+            
             response = {'status': 'connected', 'session_id': session_id}
             client_socket.send(json.dumps(response).encode() + b'\n')
             
             self.logger.info(f"Session {session_id} ({client_type}) connected from {addr}")
-            self.log_session_stats()
             
-            # 메시지 수신 루프
             buffer = ""
             while self.running:
                 try:
                     data = client_socket.recv(1024).decode()
                     if not data:
-                        self.logger.info(f"Client {session_id} disconnected (no data)")
+                        self.logger.info(f"Client {session_id} disconnected")
                         break
                     
                     self.sessions[session_id]['last_activity'] = time.time()
@@ -176,37 +305,37 @@ class CANBroker:
         except Exception as e:
             self.logger.error(f"Error handling client {addr}: {e}")
         finally:
-            if session_id and session_id in self.sessions:
-                self.logger.info(f"Cleaning up session {session_id}")
-                del self.sessions[session_id]
-                self.log_session_stats()
+            if session_id:
+                if session_id in self.sessions:
+                    del self.sessions[session_id]
+                if session_id in self.security_managers:
+                    del self.security_managers[session_id]
             client_socket.close()
     
     def process_message(self, session_id, message):
-        """CAN 메시지 처리 및 라우팅"""
         try:
             msg_data = json.loads(message)
             msg_type = msg_data.get('type', 'unknown')
             
-            self.logger.debug(f"Processing message from {session_id}: type={msg_type}")
-            
             if msg_type == 'send':
-                # CAN 메시지 전송
+                can_data = bytes.fromhex(msg_data['data'])
+                
+                # CAN 데이터 길이 검증
+                if len(can_data) > 8:
+                    self.logger.error(f"[{session_id}] CAN data too long: {len(can_data)} bytes")
+                    return
+                
                 can_msg = CANMessage(
                     can_id=msg_data['can_id'],
-                    data=bytes.fromhex(msg_data['data'])
+                    data=can_data
                 )
                 
-                self.logger.info(f"CAN message from {session_id}: ID=0x{can_msg.can_id:03X}, Data={can_msg.data.hex()}")
+                self.logger.info(f"CAN from {session_id}: ID=0x{can_msg.can_id:03X}, Data={can_msg.data.hex()} ({len(can_msg.data)} bytes)")
                 self.route_message(session_id, can_msg)
                 
             elif msg_type == 'dump_start':
-                # candump 시작 - 큐에 쌓인 메시지들 전송
-                self.logger.info(f"Starting candump for session {session_id}")
+                self.logger.info(f"Starting candump for {session_id}")
                 self.send_queued_messages(session_id)
-                
-            else:
-                self.logger.warning(f"Unknown message type '{msg_type}' from {session_id}")
                 
         except json.JSONDecodeError as e:
             self.logger.error(f"Invalid JSON from {session_id}: {e}")
@@ -214,110 +343,179 @@ class CANBroker:
             self.logger.error(f"Error processing message from {session_id}: {e}")
     
     def route_message(self, sender_session, can_msg):
-        """메시지 라우팅 로직"""
         sender_info = self.sessions.get(sender_session)
         if not sender_info:
-            self.logger.error(f"Unknown sender session: {sender_session}")
             return
         
         sender_type = sender_info['type']
-        self.logger.info(f"Routing message from {sender_session} ({sender_type}): ID=0x{can_msg.can_id:03X}")
         
-        # 게이트웨이 로직
         if sender_type == 'infotainment':
-            # 인포테인먼트에서 온 메시지
-            if can_msg.can_id == 0x123:  # 게이트웨이와의 통신
-                self.logger.info(f"Gateway authentication request from {sender_session}")
-                # 게이트웨이 인증 처리
-                response = self.handle_gateway_auth(sender_session, can_msg)
-                if response:
-                    self.logger.info(f"Sending auth response to {sender_session}: ID=0x{response.can_id:03X}")
-                    self.send_to_session(sender_session, response)
-                else:
-                    self.logger.warning(f"Authentication failed for {sender_session}")
-            
-            elif can_msg.can_id == 0x456 and self.is_authenticated(sender_session):
-                # 인증된 세션만 엔진 ECU에 접근 가능
-                self.logger.info(f"Forwarding to engine ECU from authenticated session {sender_session}")
-                self.forward_to_engine(sender_session, can_msg)
-            
+            if can_msg.can_id == 0x7DF and len(can_msg.data) >= 3:
+                self.handle_uds_request(sender_session, can_msg)
             elif can_msg.can_id == 0x456:
-                self.logger.warning(f"Unauthorized engine access attempt from {sender_session}")
-            
-            else:
-                self.logger.debug(f"Unhandled CAN ID 0x{can_msg.can_id:03X} from {sender_session}")
+                self.handle_engine_access(sender_session, can_msg)
         
         elif sender_type == 'engine':
-            # 엔진에서 온 응답 메시지 - 원래 요청한 세션으로 전달
-            self.logger.info(f"Engine response: ID=0x{can_msg.can_id:03X}")
-            target_session = self.find_target_session(can_msg)
-            if target_session:
-                self.logger.info(f"Forwarding engine response to {target_session}")
-                self.send_to_session(target_session, can_msg)
+            self.handle_engine_response(sender_session, can_msg)
+    
+    def handle_uds_request(self, session_id, can_msg):
+        data = can_msg.data
+        if len(data) < 2:
+            return
+            
+        service_id = data[1]
+        
+        if service_id == 0x27:
+            self.handle_security_access(session_id, can_msg)
+        else:
+            self.logger.debug(f"Unhandled UDS service 0x{service_id:02X} from {session_id}")
+    
+    def handle_security_access(self, session_id, can_msg):
+        data = can_msg.data
+        
+        if len(data) < 3:
+            self.send_uds_error(session_id, 0x27, 0x13)
+            return
+            
+        sub_function = data[2]
+        security_manager = self.security_managers.get(session_id)
+        
+        if not security_manager:
+            self.send_uds_error(session_id, 0x27, 0x22)
+            return
+        
+        if sub_function in [0x01, 0x03, 0x05]:
+            # 시드 요청
+            accessible, message = security_manager.is_level_accessible(sub_function)
+            if not accessible:
+                self.logger.warning(f"[{session_id}] Security access denied for level 0x{sub_function:02X}: {message}")
+                self.send_uds_error(session_id, 0x27, 0x37)
+                return
+                
+            seed = security_manager.generate_seed(sub_function)
+            if seed is not None:
+                # 시드 응답을 두 개의 CAN 프레임으로 나누어 전송
+                # 첫 번째 프레임: PCI, SID, Sub-function, Seed 상위 2바이트
+                response1_data = struct.pack('>BBBH', 0x10, 0x67, sub_function, (seed >> 16) & 0xFFFF)
+                response1_data += b'\x00\x00\x00'  # 패딩
+                response1 = CANMessage(can_id=0x7E8, data=response1_data[:8])
+                
+                # 두 번째 프레임: 연속 프레임, Seed 하위 2바이트
+                response2_data = struct.pack('>BH', 0x21, seed & 0xFFFF)
+                response2_data += b'\x00\x00\x00\x00\x00'  # 패딩
+                response2 = CANMessage(can_id=0x7E8, data=response2_data[:8])
+                
+                self.send_to_session(session_id, response1)
+                time.sleep(0.01)  # 작은 지연
+                self.send_to_session(session_id, response2)
+                
+                self.logger.info(f"[{session_id}] Sent seed for level 0x{sub_function:02X}: 0x{seed:08X} (multi-frame)")
             else:
-                self.logger.warning("No target session found for engine response")
+                self.send_uds_error(session_id, 0x27, 0x31)
+                
+        elif sub_function in [0x02, 0x04, 0x06]:
+            # 키 전송 (멀티프레임으로 수신)
+            # 이 예제에서는 단일 프레임으로 가정 (실제로는 ISO-TP 구현 필요)
+            if len(data) < 7:
+                self.send_uds_error(session_id, 0x27, 0x13)
+                return
+                
+            # 키 추출 (data[3:7])
+            provided_key = struct.unpack('>I', data[3:7])[0]
+            level = sub_function - 1
+            
+            success, message = security_manager.verify_key(level, provided_key)
+            
+            if success:
+                response_data = struct.pack('>BBB', 0x03, 0x67, sub_function)
+                response_data += b'\x00\x00\x00\x00\x00'  # 패딩
+                response = CANMessage(can_id=0x7E8, data=response_data[:8])
+                self.send_to_session(session_id, response)
+                self.logger.info(f"[{session_id}] Security access granted for level 0x{level:02X}")
+            else:
+                self.logger.warning(f"[{session_id}] Security access failed for level 0x{level:02X}: {message}")
+                if "too many attempts" in message or "timeout" in message:
+                    self.send_uds_error(session_id, 0x27, 0x36)
+                else:
+                    self.send_uds_error(session_id, 0x27, 0x35)
+        else:
+            self.send_uds_error(session_id, 0x27, 0x12)
     
-    def handle_gateway_auth(self, session_id, can_msg):
-        """게이트웨이 인증 처리"""
-        if len(can_msg.data) >= 4:
-            # 간단한 시드-키 알고리즘 (취약점 포함)
-            seed = struct.unpack('>I', can_msg.data[:4])[0]
-            key = (seed ^ 0xDEADBEEF) & 0xFFFFFFFF  # 예측 가능한 키 생성
+    def handle_engine_access(self, session_id, can_msg):
+        security_manager = self.security_managers.get(session_id)
+        if not security_manager:
+            self.logger.warning(f"No security manager for {session_id}")
+            return
             
-            self.logger.info(f"Gateway auth: session={session_id}, seed=0x{seed:08X}, key=0x{key:08X}")
-            
-            # 세션 인증 상태 업데이트
-            self.gateway_state[session_id] = {
-                'authenticated': True,
-                'timestamp': time.time()
-            }
-            
-            self.logger.info(f"Session {session_id} authenticated successfully")
-            
-            # 인증 성공 응답
-            response_data = struct.pack('>I', key)
-            return CANMessage(can_id=0x124, data=response_data)
+        if not security_manager.security_levels[0x05]['unlocked']:
+            self.logger.warning(f"[{session_id}] Unauthorized engine access attempt")
+            error_response = CANMessage(can_id=0x7E8, data=bytes([0x03, 0x7F, 0x22, 0x33, 0x00, 0x00, 0x00, 0x00]))
+            self.send_to_session(session_id, error_response)
+            return
         
-        self.logger.warning(f"Invalid auth data length from {session_id}")
-        return None
+        self.logger.info(f"[{session_id}] Authorized engine access - forwarding to engine ECU")
+        self.forward_to_engine(session_id, can_msg)
     
-    def is_authenticated(self, session_id):
-        """세션 인증 상태 확인"""
-        auth_info = self.gateway_state.get(session_id)
-        if not auth_info:
-            self.logger.debug(f"Session {session_id} not authenticated")
-            return False
+    def send_uds_error(self, session_id, service_id, error_code):
+        error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
+        error_data += b'\x00\x00\x00\x00'  # 패딩
+        error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
+        self.send_to_session(session_id, error_response)
         
-        # 인증 타임아웃 (5분)
-        if time.time() - auth_info['timestamp'] > 300:
-            self.logger.info(f"Session {session_id} authentication expired")
-            del self.gateway_state[session_id]
-            return False
+        error_names = {
+            0x12: "Sub-function not supported",
+            0x13: "Incorrect message length",
+            0x22: "Conditions not correct",
+            0x31: "Request out of range",
+            0x33: "Security access denied",
+            0x35: "Invalid key",
+            0x36: "Exceeded number of attempts",
+            0x37: "Required time delay not expired"
+        }
         
-        return auth_info['authenticated']
+        error_name = error_names.get(error_code, f"Unknown error 0x{error_code:02X}")
+        self.logger.info(f"[{session_id}] UDS Error: {error_name}")
     
     def forward_to_engine(self, session_id, can_msg):
-        """엔진 ECU로 메시지 전달"""
-        # 엔진 ECU 세션 찾기
-        engine_session = None
-        for sid, info in self.sessions.items():
-            if info['type'] == 'engine':
-                engine_session = sid
-                break
-        
-        if engine_session:
-            # 메시지에 원본 세션 정보 추가
-            modified_msg = {
-                'type': 'forward',
-                'original_session': session_id,
-                'can_id': can_msg.can_id,
-                'data': can_msg.data.hex(),
-                'timestamp': can_msg.timestamp
-            }
-            self.send_raw_message(engine_session, json.dumps(modified_msg))
+        # 엔진 ECU 응답 시뮬레이션
+        if len(can_msg.data) >= 3 and can_msg.data[1] == 0x22:  # Read Data By Identifier
+            # 플래그 응답 생성
+            flag_data = b"FLAG{ECU_HACKED_2024}"
+            
+            # 멀티프레임으로 플래그 전송
+            total_length = len(flag_data) + 3  # 3바이트 헤더 포함
+            
+            # 첫 번째 프레임
+            first_frame = struct.pack('>BB', 0x10 | (total_length >> 8), total_length & 0xFF)
+            first_frame += struct.pack('>BB', 0x62, 0xF1)  # Positive response + DID
+            first_frame += flag_data[:4]  # 처음 4바이트
+            
+            response1 = CANMessage(can_id=0x458, data=first_frame)
+            self.send_to_session(session_id, response1)
+            
+            # 연속 프레임들
+            remaining_data = flag_data[4:]
+            frame_counter = 1
+            
+            while remaining_data:
+                frame_data = struct.pack('>B', 0x20 | frame_counter)
+                chunk = remaining_data[:7]
+                frame_data += chunk
+                frame_data += b'\x00' * (8 - len(frame_data))  # 패딩
+                
+                response = CANMessage(can_id=0x458, data=frame_data)
+                time.sleep(0.01)
+                self.send_to_session(session_id, response)
+                
+                remaining_data = remaining_data[7:]
+                frame_counter = (frame_counter + 1) & 0x0F
+            
+            self.logger.info(f"[{session_id}] Engine ECU flag sent via multi-frame")
+    
+    def handle_engine_response(self, session_id, can_msg):
+        pass
     
     def send_to_session(self, session_id, can_msg):
-        """특정 세션에 CAN 메시지 전송"""
         if session_id in self.sessions:
             msg_data = {
                 'type': 'receive',
@@ -327,97 +525,65 @@ class CANBroker:
             }
             self.send_raw_message(session_id, json.dumps(msg_data))
         else:
-            # 세션이 없으면 큐에 저장
             self.message_queues[session_id].append(can_msg)
     
     def send_raw_message(self, session_id, message):
-        """raw 메시지 전송"""
         try:
             session_info = self.sessions.get(session_id)
             if not session_info:
-                self.logger.error(f"Session {session_id} not found for message send")
                 return False
                 
             socket_obj = session_info['socket']
             socket_obj.send((message + '\n').encode())
-            self.logger.debug(f"Sent message to {session_id}: {message[:100]}...")
             return True
             
         except Exception as e:
-            self.logger.error(f"Error sending message to {session_id}: {e}")
-            # 연결이 끊어진 세션 정리
+            self.logger.error(f"Error sending to {session_id}: {e}")
             if session_id in self.sessions:
                 del self.sessions[session_id]
             return False
     
     def send_queued_messages(self, session_id):
-        """큐에 쌓인 메시지들 전송"""
         if session_id in self.message_queues:
             for can_msg in self.message_queues[session_id]:
                 self.send_to_session(session_id, can_msg)
             self.message_queues[session_id].clear()
     
-    def find_target_session(self, can_msg):
-        """엔진 응답의 타겟 세션 찾기"""
-        # 실제로는 메시지 내용을 파싱해서 원본 세션 ID 추출
-        # 여기서는 간단히 구현
-        return None
-    
     def stats_reporter(self):
-        """주기적 통계 리포팅"""
         while self.running:
-            time.sleep(30)  # 30초마다
+            time.sleep(60)
             if self.sessions:
                 self.log_session_stats()
-                self.log_auth_stats()
+                self.log_security_stats()
     
     def log_session_stats(self):
-        """세션 통계 로깅"""
         total_sessions = len(self.sessions)
         infotainment_count = sum(1 for s in self.sessions.values() if s['type'] == 'infotainment')
         engine_count = sum(1 for s in self.sessions.values() if s['type'] == 'engine')
         
         self.logger.info(f"Session Stats: Total={total_sessions}, Infotainment={infotainment_count}, Engine={engine_count}")
-        
-        # 개별 세션 정보
-        for session_id, info in self.sessions.items():
-            uptime = time.time() - info['connected_at']
-            inactive_time = time.time() - info['last_activity']
-            self.logger.debug(f"  {session_id} ({info['type']}): uptime={uptime:.1f}s, inactive={inactive_time:.1f}s, msgs={info['message_count']}")
     
-    def log_auth_stats(self):
-        """인증 통계 로깅"""
-        auth_count = len(self.gateway_state)
-        if auth_count > 0:
-            self.logger.info(f"Authenticated sessions: {auth_count}")
-            for session_id, auth_info in self.gateway_state.items():
-                auth_age = time.time() - auth_info['timestamp']
-                self.logger.debug(f"  {session_id}: authenticated {auth_age:.1f}s ago")
-    
-    def get_status(self):
-        """브로커 상태 반환"""
-        return {
-            'running': self.running,
-            'total_sessions': len(self.sessions),
-            'authenticated_sessions': len(self.gateway_state),
-            'sessions': {
-                session_id: {
-                    'type': info['type'],
-                    'addr': f"{info['addr'][0]}:{info['addr'][1]}",
-                    'connected_at': info['connected_at'],
-                    'last_activity': info['last_activity'],
-                    'message_count': info['message_count']
-                }
-                for session_id, info in self.sessions.items()
+    def log_security_stats(self):
+        security_stats = {}
+        for session_id, manager in self.security_managers.items():
+            unlocked_levels = sum(1 for level_info in manager.security_levels.values() if level_info['unlocked'])
+            total_attempts = sum(level_info['attempts'] for level_info in manager.security_levels.values())
+            
+            security_stats[session_id] = {
+                'unlocked_levels': unlocked_levels,
+                'total_attempts': total_attempts,
+                'prng_counter': manager.prng.counter
             }
-        }
-
+        
+        if security_stats:
+            self.logger.info(f"Security Stats: {len(security_stats)} sessions with security managers")
+            for session_id, stats in security_stats.items():
+                self.logger.debug(f"  {session_id}: {stats['unlocked_levels']}/3 levels unlocked, {stats['total_attempts']} attempts, PRNG: {stats['prng_counter']}")
+    
     def stop(self):
-        """브로커 종료"""
-        self.logger.info("Stopping CAN Broker...")
+        self.logger.info("Stopping Advanced CAN Broker...")
         self.running = False
         
-        # 모든 클라이언트 연결 종료
         for session_id, info in list(self.sessions.items()):
             try:
                 info['socket'].close()
@@ -427,7 +593,7 @@ class CANBroker:
         if hasattr(self, 'server_socket'):
             self.server_socket.close()
             
-        self.logger.info("CAN Broker stopped")
+        self.logger.info("Advanced CAN Broker stopped")
 
 if __name__ == "__main__":
     broker = CANBroker()

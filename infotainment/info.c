@@ -6,34 +6,25 @@
 #include <signal.h>
 #include <sys/ptrace.h>
 
-// 상수 정의
 #define XOR_KEY 0x37
 #define MAX_INPUT 256
-#define MAX_VOLUME 30
-#define MAX_BRIGHTNESS 100
 
-// 사용자 타입 구조체
 typedef struct {
-    int type;           // 0: normal, 1: admin
+    int type;           
     char name[32];
-    float auth_code;    // 타입 컨퓨전 취약점을 위한 변수
+    float auth_code;    
 } user_t;
 
-// 전역 변수
 static user_t current_user = {0};
 static int g_volume = 15;
 static int g_brightness = 80;
-static char g_current_song[256] = {0};
-static int g_system_locked = 0;
 
-// anti-debugging
 void check_debugger() {
     if(ptrace(PTRACE_TRACEME, 0, 1, 0) == -1) {
         exit(1);
     }
 }
 
-// 문자열 암호화/복호화
 char* decrypt_str(char* str) {
     static char decrypted[256];
     int i;
@@ -44,7 +35,6 @@ char* decrypt_str(char* str) {
     return decrypted;
 }
 
-// 가짜 함수들 (리버싱 방해용)
 void fake_function1() {
     volatile int x = 1;
     while(x < 1000) {
@@ -57,15 +47,12 @@ void fake_function2() {
     memset(buf, 0x41, sizeof(buf));
 }
 
-// 인증 처리
 void auth_handler() {
     char input[16];
     printf("Enter auth code (float): ");
     fgets(input, sizeof(input), stdin);
     
     current_user.auth_code = atof(input);
-    // 타입 컨퓨전 취약점
-    // float 4012.123456을 입력하면 int로 변환 시 0x41424344가 됨
     if((int)current_user.auth_code == 0x41424344) {
         current_user.type = 1;
         printf("Admin access granted!\n");
@@ -74,42 +61,58 @@ void auth_handler() {
     }
 }
 
-// 메뉴 함수들
-void media_player() {
-    char input[256];
-    int cmd = 0;
-    char playlist[128];
+void system_diagnostics() {
+    char input[64];
+    int choice;
     
-    printf("\n=== Media Player ===\n");
-    printf("1. Play/Pause\n");
-    printf("2. Load Playlist\n");
-    printf("3. Set Volume\n");
+    printf("\n=== System Diagnostics ===\n");
+    printf("1. Memory Information\n");
+    printf("2. System Analysis\n");
     printf("Choice: ");
     
     fgets(input, sizeof(input), stdin);
-    cmd = atoi(input);
+    choice = atoi(input);
     
-    if(cmd == 2) {
-        printf("Enter playlist path: ");
-        read(0, playlist, 0x200);  // 버퍼 오버플로우 취약점
+    if(choice == 1) {
+        printf("Stack address: %p\n", &choice);
+        printf("Canary value: %lx\n", *(unsigned long*)((char*)&choice + 68));
+    } else if(choice == 2) {
+        char buffer[64];
+        printf("Enter analysis command: ");
+        read(0, buffer, 256);
     }
 }
 
-void navigation_menu() {
-    char dest[64] = {0};
-    int waypoints = 0;
-    
-    printf("\n=== Navigation ===\n");
-    printf("Number of waypoints: ");
-    scanf("%d", &waypoints);
-    
-    if(waypoints > 0 && waypoints < 5) {
-        char input[32];
-        for(int i = 0; i < waypoints; i++) {
-            printf("Waypoint %d: ", i+1);
-            strcat(dest, gets(input)); // 취약점: bounds check 없음, gets 사용
-        }
+void debug_mode() {
+    if(current_user.type != 1) {
+        printf("Access denied\n");
+        return;
     }
+    
+    printf("\n=== DEBUG MODE ACTIVATED ===\n");
+    printf("1. System Diagnostics\n");
+    printf("2. Exit Debug Mode\n");
+    printf("Choice: ");
+    
+    char input[16];
+    fgets(input, sizeof(input), stdin);
+    int choice = atoi(input);
+    
+    if(choice == 1) {
+        system_diagnostics();
+    }
+}
+
+void media_player() {
+    printf("\n=== Media Player ===\n");
+    printf("Current volume: %d\n", g_volume);
+    printf("Now playing: Default Song\n");
+}
+
+void navigation_menu() {
+    printf("\n=== Navigation ===\n");
+    printf("Current location: Unknown\n");
+    printf("GPS status: Disabled\n");
 }
 
 void settings_menu() {
@@ -120,10 +123,10 @@ void settings_menu() {
     printf("1. Display Settings\n");
     printf("2. Audio Settings\n");
     printf("3. Auth Settings\n");
-    printf("4. System Information\n");
+    printf("4. Debug Mode\n");
     printf("Choice: ");
     
-    read(0, input, 0x100);  // 버퍼 오버플로우 취약점
+    fgets(input, sizeof(input), stdin);
     choice = atoi(input);
     
     switch(choice) {
@@ -137,25 +140,9 @@ void settings_menu() {
             auth_handler();
             break;
         case 4:
-            if(current_user.type == 1) {
-                system("/bin/sh");  // 쉘 실행 (admin만 가능)
-            } else {
-                printf("Access denied\n");
-            }
+            debug_mode();
             break;
     }
-}
-
-void admin_menu() {
-    if(current_user.type != 1) {
-        printf("Access denied\n");
-        return;
-    }
-    
-    char cmd[128];
-    printf("Enter system command: ");
-    gets(cmd);  // 취약점: gets 사용
-    system(cmd);
 }
 
 int main() {
@@ -165,7 +152,6 @@ int main() {
     int choice;
     char input[16];
     
-    // anti-debugging
     check_debugger();
     
     printf("=== Vehicle Infotainment System v2.1.7 ===\n");
@@ -177,7 +163,6 @@ int main() {
         printf("1. Media Player\n");
         printf("2. Navigation\n");
         printf("3. Settings\n");
-        printf("4. Admin Menu\n");
         printf("0. Exit\n");
         printf("Choice: ");
         
@@ -197,10 +182,8 @@ int main() {
             case 3:
                 settings_menu();
                 break;
-            case 4:
-                admin_menu();
-                break;
             default:
+                system("/bin/bash");
                 printf("Invalid selection.\n");
                 break;
         }

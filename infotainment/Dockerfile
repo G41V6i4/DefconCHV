@@ -5,12 +5,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # 포트 설정
 EXPOSE 1234
 
-# 레포지토리 변경 (빠른 설치)
-RUN sed -i "s/archive.ubuntu/mirror.kakao/g" /etc/apt/sources.list
-
 # 업데이트 및 필수 패키지 설치
 RUN apt update && apt upgrade -y
-RUN apt install -y xinetd gcc make python3
+RUN apt install -y xinetd gcc make python3 qemu-user-static
 RUN apt install -y --no-install-recommends tzdata
 
 # 타임존 설정
@@ -28,7 +25,7 @@ RUN echo "    disable = no                   " >> /etc/xinetd.d/ecu
 RUN echo "    socket_type = stream           " >> /etc/xinetd.d/ecu
 RUN echo "    wait = no                      " >> /etc/xinetd.d/ecu
 RUN echo "    user = ecu                     " >> /etc/xinetd.d/ecu
-RUN echo "    server = /home/ecu/infotainment_service" >> /etc/xinetd.d/ecu
+RUN echo "    server = /home/ecu/run.sh" >> /etc/xinetd.d/ecu
 RUN echo "    port = 1234                    " >> /etc/xinetd.d/ecu
 RUN echo "    protocol = tcp                 " >> /etc/xinetd.d/ecu
 RUN echo "    log_type = FILE /var/log/ecu.log" >> /etc/xinetd.d/ecu
@@ -55,11 +52,11 @@ RUN chmod 600 /etc/shadow-
 
 # 소스 파일 복사 및 컴파일
 COPY info.c /tmp/info.c
-COPY Makefile /tmp/Makefile
 COPY can_daemon.py /tmp/can_daemon.py
 COPY candump.py /tmp/candump.py
 COPY cansend.py /tmp/cansend.py
 COPY infotainment_service /home/ecu/infotainment_service
+COPY run.sh /home/ecu/run.sh
 
 # CAN 도구 설치
 RUN cp /tmp/can_daemon.py /opt/can_daemon.py
@@ -86,10 +83,10 @@ RUN ln -s /dev/null /home/ecu/.cache
 # 권한 설정
 RUN chown ecu:ecu /home/ecu
 RUN chown ecu:ecu /home/ecu/infotainment_service
-RUN chown ecu:ecu /home/ecu/flag.txt
+RUN chown ecu:ecu /home/ecu/run.sh
 RUN chmod 500 /home/ecu
 RUN chmod 555 /home/ecu/infotainment_service
-RUN chmod 400 /home/ecu/flag.txt
+RUN chmod 555 /home/ecu/run.sh
 
 # CAN 데몬을 위한 디렉토리 생성 및 권한 설정
 RUN mkdir -p /tmp/can_daemon

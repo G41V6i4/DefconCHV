@@ -59,8 +59,7 @@ COPY Makefile /tmp/Makefile
 COPY can_daemon.py /tmp/can_daemon.py
 COPY candump.py /tmp/candump.py
 COPY cansend.py /tmp/cansend.py
-RUN cd /tmp && make clean && make
-RUN mv /tmp/infotainment_service /home/ecu/infotainment_service
+COPY infotainment_service /home/ecu/infotainment_service
 
 # CAN 도구 설치
 RUN cp /tmp/can_daemon.py /opt/can_daemon.py
@@ -71,9 +70,6 @@ RUN chmod +x /opt/can_daemon.py /opt/cansend.py /opt/candump.py
 # CAN 도구 심볼릭 링크
 RUN ln -sf /opt/cansend.py /usr/local/bin/cansend
 RUN ln -sf /opt/candump.py /usr/local/bin/candump
-
-# 플래그 생성
-RUN echo "CTF{infotainment_ecu_compromised_stage1}" > /home/ecu/flag.txt
 
 # 홈 디렉토리 정리
 RUN rm -rf /home/ecu/.bash_history

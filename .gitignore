@@ -33,3 +33,5 @@ Thumbs.db
 debug_*
 test_*
 fix*
+system.img
+*.img

@@ -216,7 +216,7 @@ class CANBroker:
         client_type = None
         
         try:
-            client_socket.settimeout(60)
+            client_socket.settimeout(3600)
             
             data = client_socket.recv(1024).decode()
             if not data:
@@ -272,7 +272,7 @@ class CANBroker:
                             self.process_message(session_id, line.strip())
                             
                 except socket.timeout:
-                    self.logger.warning(f"Timeout for session {session_id}")
+                    self.logger.warning(f"1-hour timeout for session {session_id}")
                     break
                 except Exception as e:
                     self.logger.error(f"Error receiving from {session_id}: {e}")

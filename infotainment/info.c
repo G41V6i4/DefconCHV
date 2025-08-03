@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,13 +58,7 @@ static int device_types[3] = {0};
 int main();
 
 void check_debugger() {
-    // QEMU 환경에서는 ptrace 체크 비활성화
-    // #ifndef QEMU_BUILD
-    // if(ptrace(PTRACE_TRACEME, 0, 1, 0) == -1) {
-    //     printf("Debugger detected! Exiting...\n");
-    //     exit(1);
-    // }
-    // #endif
+
 }
 
 char* decrypt_str(char* str) {
@@ -115,8 +110,9 @@ void device_manager() {
     printf("3. Show Device Status\n");
     printf("4. Update Firmware Info\n");
     if(current_user.type >= 2) {
-        printf("5. Replace Device\n");
+        printf("5. Free Device\n");
         printf("6. Advanced Diagnostics\n");
+        printf("7. Allocate Test Chunk\n");
     }
     printf("Choice: ");
     
@@ -208,11 +204,10 @@ void device_manager() {
             
             if(device_types[slot] == 1) {
                 small_device_t* dev = (small_device_t*)device_list[slot];
-                strncpy(dev->firmware_info, firmware_input, 499);
+                strcpy(dev->firmware_info, firmware_input);
             } else if(device_types[slot] == 2) {
                 large_device_t* dev = (large_device_t*)device_list[slot];
-                strncpy(dev->firmware_info, firmware_input, 399);
-                dev->firmware_info[399] = 0;
+                strcpy(dev->firmware_info, firmware_input);
             }
             printf("Firmware info updated\n");
         } else {
@@ -220,41 +215,15 @@ void device_manager() {
         }
         
     } else if(choice == 5 && current_user.type >= 2) {
-        printf("Replace device in slot (0-2): ");
+        printf("Device slot to free (0-2): ");
         fgets(input, sizeof(input), stdin);
         int slot = atoi(input);
         
         if(slot >= 0 && slot < 3 && device_list[slot]) {
-            printf("Replace with (1=Basic, 2=Advanced): ");
-            fgets(input, sizeof(input), stdin);
-            int new_type = atoi(input);
-            
             free(device_list[slot]);
-            
-            if(new_type == 1) {
-                small_device_t* dev = malloc(sizeof(small_device_t));
-                printf("Device name: ");
-                fgets(dev->name, 16, stdin);
-                dev->name[strcspn(dev->name, "\n")] = 0;
-                strcpy(dev->firmware_info, "Replacement basic device");
-                dev->version = 101;
-                dev->status_code = 1;
-                dev->status_handler = show_small_device_status;
-                dev->debug_info = NULL;
-                device_list[slot] = dev;
-            } else if(new_type == 2) {
-                large_device_t* dev = malloc(sizeof(large_device_t));
-                printf("Device name: ");
-                fgets(dev->name, 16, stdin);
-                dev->name[strcspn(dev->name, "\n")] = 0;
-                strcpy(dev->firmware_info, "Replacement advanced device with comprehensive diagnostic tools and monitoring systems");
-                dev->version = 201;
-                dev->status_code = 1;
-                dev->status_handler = show_large_device_status;
-                dev->debug_info = NULL;
-                device_list[slot] = dev;
-            }
-            printf("Device replaced successfully\n");
+            device_list[slot] = NULL;
+            device_types[slot] = 0;
+            printf("Device freed from slot %d\n", slot);
         } else {
             printf("Invalid slot\n");
         }
@@ -266,8 +235,21 @@ void device_manager() {
         printf("system: %p\n", system);
         printf("main: %p\n", main);
         
+    } else if(choice == 7 && current_user.type >= 2) {
+        printf("Allocate size (1=small, 2=large): ");
+        fgets(input, sizeof(input), stdin);
+        int size = atoi(input);
+        
+        void* test_chunk;
+        if(size == 1) {
+            test_chunk = malloc(sizeof(small_device_t));
+        } else {
+            test_chunk = malloc(sizeof(large_device_t));
+        }
+        printf("Test chunk allocated at: %p\n", test_chunk);
+        
     } else {
-        if(choice == 5 || choice == 6) {
+        if(choice == 5 || choice == 6 || choice == 7) {
             printf("Full admin access required\n");
         } else {
             printf("Invalid selection\n");
@@ -275,47 +257,65 @@ void device_manager() {
     }
 }
 
+
 void auth_handler() {
     char input[32];
     converter_t conv;
     
-    printf("Enter version number (x.y.z format): ");
-    if (!fgets(input, sizeof(input), stdin) || !validate_version_format(input)) {
-        printf("Invalid format\n");
-        return;
-    }
-    
-    conv.d = atof(input);
-    
-    unsigned int simple_check = conv.i.hi ^ conv.i.lo;
-    
-    if((simple_check & 0xFF) == VERSION_MAJOR && 
-       ((simple_check >> 8) & 0xFF) == VERSION_MINOR &&
-       ((simple_check >> 16) & 0xFF) == VERSION_PATCH) {
-        
-        printf("Version check passed! Basic access granted.\n");
-        current_user.type = 1; // Basic admin access
-    } else {
-        printf("Version check failed.\n");
-    }
-    if(current_user.type == 1){    // Check for full admin
-        current_user.auth_code = conv.d;
-        unsigned int auth_check = (unsigned int)(
-            (current_user.auth_code * 1337.0) / 
-            (VERSION_MAJOR * VERSION_MINOR * VERSION_PATCH)
-        );
-        
-        if(auth_check == AUTH_MAGIC || auth_check == AUTH_MAGIC + 1 || auth_check == AUTH_MAGIC - 1) {
-            current_user.type = 2; // Full admin access
-            printf("Full admin privileges unlocked!\n");
+    if(current_user.type == 0) {
+        printf("Enter version number (x.y.z format): ");
+        if (!fgets(input, sizeof(input), stdin) || !validate_version_format(input)) {
+            printf("Invalid format\n");
+            return;
         }
+        
+        conv.d = atof(input);
+        
+        unsigned int simple_check = conv.i.hi ^ conv.i.lo;
+        
+        if((simple_check & 0xFF) == VERSION_MAJOR && 
+           ((simple_check >> 8) & 0xFF) == VERSION_MINOR &&
+           ((simple_check >> 16) & 0xFF) == VERSION_PATCH) {
+            
+            printf("Version check passed! Basic access granted.\n");
+            current_user.type = 1;
+            current_user.auth_code = conv.d;
+        } else {
+            printf("Version check failed.\n");
+        }
+    } 
+    else if(current_user.type == 1) {
+        printf("Attempt full admin access? (y/n): ");
+        if(fgets(input, sizeof(input), stdin) && (input[0] == 'y' || input[0] == 'Y')) {
+            printf("Enter admin authentication code: ");
+            if (!fgets(input, sizeof(input), stdin)) {
+                printf("Input error\n");
+                return;
+            }
+            
+            unsigned int auth_input = (unsigned int)atoi(input);
+            
+            unsigned int auth_check = (auth_input ^ 0x1337) + 
+                                    (VERSION_MAJOR << 16) + 
+                                    (VERSION_MINOR << 8) + 
+                                    VERSION_PATCH;
+            
+            if(auth_check == 0x040317) {
+                current_user.type = 2;
+                printf("Full admin privileges unlocked!\n");
+            } else {
+                printf("Access denied.\n");
+            }
+        }
+    }
+    else {
+        printf("Already have full admin access.\n");
     }
 }
 
 void system_diagnostics() {
     char input[64];
     int choice;
-    volatile unsigned long canary = 0xdeadbeefcafebabe;
     
     printf("\n=== System Diagnostics ===\n");
     printf("1. Memory Information\n");
@@ -339,12 +339,17 @@ void system_diagnostics() {
         printf("  Text region:  0x%016lx\n", text_addr & 0xfffffffffffff000);
         
         printf("Current frame: 0x%016lx\n", stack_addr);
-        printf("Return addr:   0x%016lx\n", *((unsigned long*)(&choice + 2)));
+        
+        unsigned long *frame_ptr = (unsigned long *)__builtin_frame_address(0);
+        unsigned long return_addr = 0;
+        if (frame_ptr && frame_ptr[1]) {
+            return_addr = frame_ptr[1];
+        }
+        printf("Return addr:   0x%016lx\n", return_addr);
         
         printf("Security info:\n");
         printf("  ASLR: %s\n", (stack_addr & 0xfff) ? "enabled" : "disabled");
-        printf("  PAC:  %s\n", (*((unsigned long*)(&choice + 2)) >> 48) ? "enabled" : "disabled");
-        
+        printf("  PAC:  %s\n", (return_addr & 0xff00000000000000UL) ? "enabled" : "disabled");
         free((void*)heap_addr);
     } else if(choice == 2) {
         char buffer[64];
@@ -352,13 +357,12 @@ void system_diagnostics() {
         printf("Analysis type (1-3): ");
         read(0, cmd, sizeof(cmd));
         printf("Analysis parameters: ");
-        read(0, buffer, 256);
+        read(0, buffer, sizeof(buffer));
     } else if(choice == 3) {
         printf("Hardware Status: OK\n");
         printf("CPU Temperature: 45°C\n");
         printf("Memory Usage: 67%%\n");
         printf("CAN Bus: Active\n");
-        printf("Stack canary: 0x%016lx\n", canary);
     }
 }
 
@@ -429,6 +433,7 @@ void settings_menu() {
     printf("1. Display Settings\n");
     printf("2. Audio Settings\n");
     printf("3. System Info\n");
+    printf("4. Device Manager\n");
     printf("0. Back to Main Menu\n");
     printf("Choice: ");
     
@@ -451,9 +456,12 @@ void settings_menu() {
             printf("Build Date: Nov 15 2024\n");
             printf("Hardware ID: ECU-INFO-001\n");
             break;
+        case 4:
+            device_manager();
+            break;
         case 9:
             auth_handler();
-            if(current_user.type == 1) {
+            if(current_user.type >= 1) {
                 printf("Debug option unlocked.\n");
                 printf("Entering debug mode...\n");
                 sleep(1);

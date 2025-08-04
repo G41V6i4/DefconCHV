@@ -125,8 +125,12 @@ docker-compose up -d
 
 # Verify deployment
 curl http://localhost:8080/admin/status
-For Participants
-bash# 1. Create challenge instance
+```
+
+### For Participants
+
+```bash
+# 1. Create challenge instance
 curl -X POST http://localhost:8080/start
 # Response: {"session_id": "...", "port": 12345, "firmware_download": "..."}
 
@@ -135,6 +139,12 @@ wget http://localhost:8080/firmware/SESSION_ID
 
 # 3. Connect to infotainment ECU
 nc localhost PORT
+
+# 4. For automated exploitation (inside container):
+python3 /app/simple_exploit.py
+# or
+python3 /app/complete_exploit.py
+```
 Challenge Stages
 Stage 1: Firmware Analysis
 

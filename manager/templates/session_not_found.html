@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Session Not Found</title>
+    <link rel="stylesheet" href="/static/css/admin_dashboard.css">
+    <style>
+        .error-container {
+            text-align: center;
+            padding: 50px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin: 50px auto;
+            max-width: 500px;
+        }
+        .error-icon {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+        .error-message {
+            font-size: 1.5rem;
+            color: #e74c3c;
+            margin-bottom: 20px;
+        }
+        .session-id {
+            font-family: monospace;
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .back-button {
+            background: #3498db;
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 5px;
+            display: inline-block;
+            margin-top: 20px;
+        }
+        .back-button:hover {
+            background: #2980b9;
+            text-decoration: none;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-container">
+            <div class="error-icon">🔍</div>
+            <div class="error-message">Session Not Found</div>
+            <p>The requested session could not be found.</p>
+            <div class="session-id">Session ID: {{ session_id }}</div>
+            <p>This session may have expired or been terminated.</p>
+            <a href="/admin" class="back-button">← Back to Dashboard</a>
+        </div>
+    </div>
+</body>
+</html>

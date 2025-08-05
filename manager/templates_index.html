@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DefCon CHV Manager</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            color: #fff;
+        }
+        .container { 
+            max-width: 800px; 
+            margin: 0 auto; 
+            padding: 20px;
+            position: relative;
+            z-index: 1;
+        }
+        .header {
+            text-align: center;
+            padding: 40px 0;
+            border-bottom: 2px solid rgba(255,255,255,0.1);
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+        .main-section {
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .start-button {
+            width: 100%;
+            padding: 20px;
+            font-size: 1.5rem;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        .start-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        .start-button:disabled {
+            background: #666;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .session-info {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0,255,0,0.1);
+            border-radius: 10px;
+            border: 1px solid rgba(0,255,0,0.3);
+        }
+        .info-item {
+            margin: 10px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .info-label {
+            font-weight: bold;
+        }
+        .info-value {
+            font-family: monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        .download-button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(45deg, #4facfe, #00f2fe);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            margin-top: 10px;
+        }
+        .download-button:hover {
+            transform: translateY(-1px);
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-running { background-color: #00ff00; }
+        .status-stopped { background-color: #ff0000; }
+        .status-pending { background-color: #ffff00; }
+        .instructions {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            border-left: 4px solid #ffd700;
+        }
+        .step {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 5px;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 DefCon CHV Manager</h1>
+            <p>Automotive Security Challenge Environment</p>
+        </div>
+        
+        <div class="main-section">
+            <h2>Start Environment</h2>
+            <p style="margin-bottom: 20px; opacity: 0.8;">
+                Start Challenge
+            </p>
+            
+            <button id="startBtn" class="start-button" onclick="startEnvironment()">
+                🚀 Start Service
+            </button>
+            
+            <div id="sessionInfo" class="session-info">
+                <h3>🎯 Session Info</h3>
+                <div class="info-item">
+                    <span class="info-label">Session ID:</span>
+                    <span id="sessionId" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Port:</span>
+                    <span id="infotainmentPort" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Status:</span>
+                    <span id="sessionStatus" class="info-value">
+                        <span class="status-indicator status-running"></span>Running
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Remaining Time:</span>
+                    <span id="remainingTime" class="info-value">-</span>
+                </div>
+                
+                <button id="downloadBtn" class="download-button" onclick="downloadFirmware()">
+                    📥 Download Firmware
+                </button>
+            </div>
+        </div>
+        
+        <div id="instructions" class="instructions" style="display: none;">
+            <h3>📋 Challenge Steps</h3>
+            <div class="step">
+                <strong>Step 1:</strong> Download and analyze firmware
+                <br><small>Use hexdump, strings etc. to analyze firmware</small>
+            </div>
+            <div class="step">
+                <strong>Step 2:</strong> Connect to infotainment system
+                <br><small id="connectCmd">nc localhost [port]</small>
+            </div>
+            <div class="step">
+                <strong>Step 3:</strong> Enable debug mode
+                <br><small>Use commands found in firmware</small>
+            </div>
+            <div class="step">
+                <strong>Step 4:</strong> Use CAN tools
+                <br><small>cansend/candump vcan0 commands</small>
+            </div>
+            <div class="step">
+                <strong>Step 5:</strong> Gateway authentication and engine ECU access
+                <br><small>Final objective</small>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let statusTimer = null;
+
+        function startEnvironment() {
+            const btn = document.getElementById('startBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> Loading...';
+
+            fetch('/start', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.session_id) {
+                    currentSessionId = data.session_id;
+                    displaySessionInfo(data);
+                    startStatusUpdates();
+                } else {
+                    alert('Failed to start environment: ' + (data.error || 'Invalid Error'));
+                    resetButton();
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Failed to start environment: ' + error.message);
+                resetButton();
+            });
+        }
+
+        function displaySessionInfo(data) {
+            document.getElementById('sessionId').textContent = data.session_id;
+            document.getElementById('infotainmentPort').textContent = data.infotainment_port;
+            document.getElementById('connectCmd').textContent = 'nc localhost ' + data.infotainment_port;
+            
+            document.getElementById('sessionInfo').style.display = 'block';
+            document.getElementById('instructions').style.display = 'block';
+            
+            const btn = document.getElementById('startBtn');
+            btn.innerHTML = '✅ Running';
+            btn.style.background = '#28a745';
+        }
+
+        function downloadFirmware() {
+            if (!currentSessionId) {
+                alert('Please create session first');
+                return;
+            }
+            
+            const url = '/firmware/' + currentSessionId;
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'infotainment_' + currentSessionId + '.bin';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function updateStatus() {
+            if (!currentSessionId) return;
+
+            fetch('/status/' + currentSessionId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'active') {
+                        const minutes = Math.floor(data.remaining_time / 60);
+                        const seconds = data.remaining_time % 60;
+                        document.getElementById('remainingTime').textContent = 
+                            minutes + 'min ' + seconds + 'sec';
+                    } else {
+                        document.getElementById('sessionStatus').innerHTML = 
+                            '<span class="status-indicator status-stopped"></span>Terminated';
+                        clearInterval(statusTimer);
+                        resetButton();
+                    }
+                })
+                .catch(error => {
+                    console.error('Status update error:', error);
+                });
+        }
+
+        function startStatusUpdates() {
+            statusTimer = setInterval(updateStatus, 5000);
+            updateStatus();
+        }
+
+        function resetButton() {
+            const btn = document.getElementById('startBtn');
+            btn.disabled = false;
+            btn.innerHTML = '🚀 Start Service';
+            btn.style.background = 'linear-gradient(45deg, #ff6b6b, #ee5a24)';
+            
+            document.getElementById('sessionInfo').style.display = 'none';
+            document.getElementById('instructions').style.display = 'none';
+            currentSessionId = null;
+        }
+    </script>
+</body>
+</html>

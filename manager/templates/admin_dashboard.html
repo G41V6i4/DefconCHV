@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DefCon CHV Admin Dashboard</title>
+    <link rel="stylesheet" href="/static/css/admin_dashboard.css">
+</head>
+<body>
+    <div class="header">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+                <h1>🛠️ DefCon CHV Admin Dashboard</h1>
+                <p>실시간 시스템 모니터링 및 관리</p>
+            </div>
+            <div style="text-align: right;">
+                <p style="margin-bottom: 10px; opacity: 0.8;">Welcome, Admin</p>
+                <form method="POST" action="/admin/logout" style="display: inline;">
+                    <button type="submit" style="
+                        background: rgba(255,255,255,0.2);
+                        color: white;
+                        border: 1px solid rgba(255,255,255,0.3);
+                        padding: 8px 15px;
+                        border-radius: 5px;
+                        cursor: pointer;
+                        font-size: 0.9rem;
+                    ">🚪 Logout</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number" id="totalSessions">-</div>
+                <div class="stat-label">활성 세션</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="systemStatus">-</div>
+                <div class="stat-label">시스템 상태</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="dockerStatus">-</div>
+                <div class="stat-label">Docker 상태</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" id="canBrokerStatus">-</div>
+                <div class="stat-label">CAN 브로커</div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>👥 활성 세션</span>
+                    <button class="btn btn-primary" onclick="refreshSessions()">새로고침</button>
+                </div>
+                <div class="panel-body">
+                    <div id="sessionsContainer">
+                        <div class="empty-state">세션 정보를 로딩 중...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">
+                    <span>🔧 시스템 제어</span>
+                </div>
+                <div class="panel-body">
+                    <div class="system-status" id="systemStatusGrid">
+                        <!-- 시스템 상태가 여기에 표시됩니다 -->
+                    </div>
+                    
+                    <div style="margin-top: 20px;">
+                        <h4>빠른 작업</h4>
+                        <button class="btn btn-primary" onclick="checkHealth()" style="margin: 5px;">
+                            헬스 체크
+                        </button>
+                        <button class="btn btn-primary" onclick="viewGatewayLogs()" style="margin: 5px;">
+                            🚪 Gateway Logs
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/admin_dashboard.js"></script>
+</body>
+</html>

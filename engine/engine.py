@@ -33,12 +33,19 @@ class EngineECU:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect(('gateway_shared', 9999))
         
-        # 핸드셰이크
+        # 연결 후 약간의 지연
+        time.sleep(0.1)
+        
+        # 핸드셰이크 - 개행 문자 포함
         handshake = {
             'session_id': 'engine_shared',
             'type': 'engine'
         }
-        self.sock.send(json.dumps(handshake).encode())
+        handshake_data = (json.dumps(handshake) + '\n').encode()
+        print(f"Sending handshake: {handshake_data}")
+        
+        bytes_sent = self.sock.send(handshake_data)
+        print(f"Handshake sent: {bytes_sent} bytes")
         
         # 응답 대기
         response = self.sock.recv(1024).decode().strip()

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login - DefCon CHV</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>🔐 Admin Login</h1>
+            <p>DefCon CHV Management System</p>
+        </div>
+        
+        {% if error %}
+        <div class="error">
+            ⚠️ {{ error }}
+        </div>
+        {% endif %}
+        
+        <div class="attempts-warning">
+            ⚠️ Maximum 5 login attempts allowed. IP will be blocked for 30 minutes after failed attempts.
+        </div>
+        
+        <form method="POST" autocomplete="off">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required 
+                       autocomplete="username" maxlength="50">
+            </div>
+            
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required 
+                       autocomplete="current-password" maxlength="100">
+            </div>
+            
+            <button type="submit" class="login-button">
+                🚀 Login
+            </button>
+        </form>
+        
+        <div class="security-notice">
+            <strong>Security Notice:</strong><br>
+            • All login attempts are logged<br>
+            • IP blocking after failed attempts<br>
+            • Session timeout: 30 minutes<br>
+            • CSRF protection enabled
+        </div>
+    </div>
+    
+    <script src="/static/js/admin_login.js"></script>
+</body>
+</html>

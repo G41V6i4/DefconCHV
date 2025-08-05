@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gateway Logs - DefCon CHV</title>
+    <link rel="stylesheet" href="/static/css/admin_dashboard.css">
+    <style>
+        .logs-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .logs-container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            overflow: hidden;
+            height: 70vh;
+        }
+        .logs-toolbar {
+            background: #34495e;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .logs-content {
+            height: calc(70vh - 60px);
+            overflow-y: auto;
+            padding: 15px;
+            background: #1e1e1e;
+            color: #f8f8f2;
+            font-family: 'Courier New', 'Monaco', monospace;
+            font-size: 0.85rem;
+            line-height: 1.4;
+        }
+        .log-line {
+            margin-bottom: 2px;
+            word-wrap: break-word;
+            border-left: 3px solid transparent;
+            padding-left: 8px;
+        }
+        .log-timestamp {
+            color: #bd93f9;
+            font-weight: bold;
+        }
+        .log-level-info {
+            color: #50fa7b;
+        }
+        .log-level-warning {
+            color: #ffb86c;
+            border-left-color: #ffb86c;
+        }
+        .log-level-error {
+            color: #ff5555;
+            border-left-color: #ff5555;
+            background: rgba(255, 85, 85, 0.1);
+        }
+        .log-can {
+            color: #8be9fd;
+            font-weight: bold;
+        }
+        .log-auth {
+            color: #ff79c6;
+            font-weight: bold;
+        }
+        .log-session {
+            background: #44475a;
+            color: #f1fa8c;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .btn-toolbar {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        .btn-primary {
+            background: #3498db;
+            color: white;
+        }
+        .btn-success {
+            background: #27ae60;
+            color: white;
+        }
+        .btn-danger {
+            background: #e74c3c;
+            color: white;
+        }
+        .btn-toolbar:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        .status-connected {
+            background: #27ae60;
+            animation: pulse 2s infinite;
+        }
+        .status-disconnected {
+            background: #e74c3c;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .filter-input {
+            padding: 6px 10px;
+            border: 1px solid #bdc3c7;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .stats-bar {
+            background: #2c3e50;
+            color: white;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+        }
+        .back-button {
+            background: #95a5a6;
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            display: inline-block;
+            margin-bottom: 20px;
+        }
+        .back-button:hover {
+            background: #7f8c8d;
+            text-decoration: none;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/admin" class="back-button">← Back to Dashboard</a>
+        
+        <div class="logs-header">
+            <h1>🚪 Gateway Logs Monitor</h1>
+            <p>Real-time CAN Gateway Activity</p>
+        </div>
+
+        <div class="logs-container">
+            <div class="logs-toolbar">
+                <div class="toolbar-group">
+                    <span id="connectionStatus">
+                        <span class="status-indicator status-disconnected"></span>
+                        Disconnected
+                    </span>
+                    <input type="text" id="filterInput" class="filter-input" placeholder="Filter logs..." onkeyup="filterLogs()">
+                </div>
+                <div class="toolbar-group">
+                    <button class="btn-toolbar btn-primary" onclick="refreshLogs()">🔄 Refresh</button>
+                    <button class="btn-toolbar btn-success" onclick="toggleLiveMode()" id="liveModeBtn">📡 Live Mode</button>
+                    <button class="btn-toolbar btn-danger" onclick="clearLogs()">🗑️ Clear</button>
+                </div>
+            </div>
+            <div class="stats-bar">
+                <span>Total Lines: <span id="totalLines">0</span></span>
+                <span>Filtered: <span id="filteredLines">0</span></span>
+                <span>Last Update: <span id="lastUpdate">Never</span></span>
+            </div>
+            <div class="logs-content" id="logsContent">
+                <div class="log-line">Loading gateway logs...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isLiveMode = false;
+        let eventSource = null;
+        let allLogs = [];
+        let filteredLogs = [];
+
+        function refreshLogs() {
+            fetch('/admin/gateway/logs/api')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        allLogs = data.logs;
+                        filterLogs();
+                        updateStats();
+                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                    } else {
+                        showError('Failed to fetch logs: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching logs:', error);
+                    showError('Network error while fetching logs');
+                });
+        }
+
+        function filterLogs() {
+            const filterValue = document.getElementById('filterInput').value.toLowerCase();
+            
+            if (filterValue.trim() === '') {
+                filteredLogs = [...allLogs];
+            } else {
+                filteredLogs = allLogs.filter(log => 
+                    log.toLowerCase().includes(filterValue)
+                );
+            }
+            
+            displayLogs();
+            updateStats();
+        }
+
+        function displayLogs() {
+            const logsContent = document.getElementById('logsContent');
+            
+            if (filteredLogs.length === 0) {
+                logsContent.innerHTML = '<div class="log-line">No logs match the current filter</div>';
+                return;
+            }
+
+            let html = '';
+            filteredLogs.forEach(log => {
+                if (!log.trim()) return;
+                
+                const formattedLog = formatLogLine(log);
+                html += formattedLog;
+            });
+            
+            logsContent.innerHTML = html;
+            logsContent.scrollTop = logsContent.scrollHeight;
+        }
+
+        function formatLogLine(log) {
+            let logClass = 'log-line';
+            let formattedLog = log;
+            
+            // 로그 레벨 감지
+            const logLower = log.toLowerCase();
+            if (logLower.includes('error') || logLower.includes('failed') || logLower.includes('denied')) {
+                logClass += ' log-level-error';
+            } else if (logLower.includes('warning') || logLower.includes('warn')) {
+                logClass += ' log-level-warning';
+            } else if (logLower.includes('info') || logLower.includes('success')) {
+                logClass += ' log-level-info';
+            }
+            
+            // 타임스탬프 하이라이트
+            formattedLog = formattedLog.replace(
+                /(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})/g,
+                '<span class="log-timestamp">$1</span>'
+            );
+            
+            // CAN 관련 키워드 하이라이트
+            formattedLog = formattedLog.replace(
+                /(CAN\s+(?:message|from|to|ID)|vcan\d+)/gi,
+                '<span class="log-can">$&</span>'
+            );
+            
+            // 인증 관련 키워드 하이라이트
+            formattedLog = formattedLog.replace(
+                /(auth(?:entication)?|gateway|security|login|access)/gi,
+                '<span class="log-auth">$&</span>'
+            );
+            
+            // 세션 ID 하이라이트
+            formattedLog = formattedLog.replace(
+                /(session_\d+_\d+)/gi,
+                '<span class="log-session">$&</span>'
+            );
+            
+            return `<div class="${logClass}">${formattedLog}</div>`;
+        }
+
+        function toggleLiveMode() {
+            const btn = document.getElementById('liveModeBtn');
+            const status = document.getElementById('connectionStatus');
+            
+            if (!isLiveMode) {
+                // 라이브 모드 시작
+                isLiveMode = true;
+                btn.innerHTML = '⏸️ Stop Live';
+                btn.className = 'btn-toolbar btn-danger';
+                
+                eventSource = new EventSource('/admin/gateway/logs/live');
+                
+                eventSource.onopen = function() {
+                    status.innerHTML = '<span class="status-indicator status-connected"></span>Live Connected';
+                };
+                
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    if (data.log) {
+                        // 새 로그를 배열에 추가
+                        allLogs.push(data.log);
+                        // 너무 많아지면 오래된 로그 제거
+                        if (allLogs.length > 500) {
+                            allLogs = allLogs.slice(-400);
+                        }
+                        filterLogs();
+                        document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+                    } else if (data.error) {
+                        showError('Live stream error: ' + data.error);
+                    }
+                };
+                
+                eventSource.onerror = function() {
+                    status.innerHTML = '<span class="status-indicator status-disconnected"></span>Connection Error';
+                    isLiveMode = false;
+                    btn.innerHTML = '📡 Live Mode';
+                    btn.className = 'btn-toolbar btn-success';
+                };
+                
+            } else {
+                // 라이브 모드 종료
+                isLiveMode = false;
+                btn.innerHTML = '📡 Live Mode';
+                btn.className = 'btn-toolbar btn-success';
+                
+                if (eventSource) {
+                    eventSource.close();
+                    eventSource = null;
+                }
+                
+                status.innerHTML = '<span class="status-indicator status-disconnected"></span>Disconnected';
+            }
+        }
+
+        function clearLogs() {
+            if (confirm('Clear all logs from display?')) {
+                allLogs = [];
+                filteredLogs = [];
+                document.getElementById('logsContent').innerHTML = '<div class="log-line">Logs cleared</div>';
+                updateStats();
+            }
+        }
+
+        function updateStats() {
+            document.getElementById('totalLines').textContent = allLogs.length;
+            document.getElementById('filteredLines').textContent = filteredLogs.length;
+        }
+
+        function showError(message) {
+            const logsContent = document.getElementById('logsContent');
+            logsContent.innerHTML = `<div class="log-line log-level-error">Error: ${message}</div>`;
+        }
+
+        // 초기 로드
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshLogs();
+        });
+
+        // 페이지 언로드 시 정리
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
+    </script>
+</body>
+</html>

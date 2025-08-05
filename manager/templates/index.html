@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DefCon CHV Manager</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 DefCon CHV Manager</h1>
+            <p>Automotive Security Challenge Environment</p>
+        </div>
+        
+        <div class="main-section">
+            <h2>Start Environment</h2>
+            <p style="margin-bottom: 20px; opacity: 0.8;">
+                Start Challenge
+            </p>
+            
+            <button id="startBtn" class="start-button" onclick="startEnvironment()">
+                🚀 Start Service
+            </button>
+            
+            <div id="sessionInfo" class="session-info">
+                <h3>🎯 Session Info</h3>
+                <div class="info-item">
+                    <span class="info-label">Session ID:</span>
+                    <span id="sessionId" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Port:</span>
+                    <span id="infotainmentPort" class="info-value">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Status:</span>
+                    <span id="sessionStatus" class="info-value">
+                        <span class="status-indicator status-running"></span>Running
+                    </span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Remaining Time:</span>
+                    <span id="remainingTime" class="info-value">-</span>
+                </div>
+                
+                <button id="downloadBtn" class="download-button" onclick="downloadFirmware()">
+                    📥 Download Firmware
+                </button>
+            </div>
+        </div>
+        
+        <div id="instructions" class="instructions" style="display: none;">
+            <h3>📋 Challenge Steps</h3>
+            <div class="step">
+                <strong>Step 1:</strong> Download and analyze firmware
+                <br><small>Use hexdump, strings etc. to analyze firmware</small>
+            </div>
+            <div class="step">
+                <strong>Step 2:</strong> Connect to infotainment system
+                <br><small id="connectCmd">nc localhost [port]</small>
+            </div>
+            <div class="step">
+                <strong>Step 3:</strong> Enable debug mode
+                <br><small>Use commands found in firmware</small>
+            </div>
+            <div class="step">
+                <strong>Step 4:</strong> Use CAN tools
+                <br><small>cansend/candump vcan0 commands</small>
+            </div>
+            <div class="step">
+                <strong>Step 5:</strong> Gateway authentication and engine ECU access
+                <br><small>Final objective</small>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

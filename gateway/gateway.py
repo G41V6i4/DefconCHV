@@ -314,6 +314,10 @@ class CANBroker:
                 self.logger.info(f"Starting candump for {session_id}")
                 self.send_queued_messages(session_id)
                 
+            elif msg_type == 'engine_response':
+                # Engine ECU로부터의 응답 처리
+                self.handle_engine_response(session_id, message)
+                
         except json.JSONDecodeError as e:
             self.logger.error(f"Invalid JSON from {session_id}: {e}")
         except Exception as e:
@@ -339,13 +343,40 @@ class CANBroker:
         data = can_msg.data
         if len(data) < 2:
             return
+        
+        # ISO-TP 프레이밍 파싱
+        first_byte = data[0]
+        
+        if (first_byte & 0xF0) == 0x00:
+            # Single Frame (0x0N)
+            sf_length = first_byte & 0x0F
+            if len(data) < sf_length + 1:
+                self.logger.warning(f"[{session_id}] Invalid single frame length")
+                return
+            service_id = data[1]
+            uds_data = data[1:sf_length+1]
             
-        service_id = data[1]
+        elif (first_byte & 0xF0) == 0x10:
+            # First Frame (0x1N)
+            total_length = ((first_byte & 0x0F) << 8) | data[1]
+            if len(data) < 3:
+                self.logger.warning(f"[{session_id}] Invalid first frame")
+                return
+            service_id = data[2]
+            uds_data = data[2:]  # 첫 번째 프레임의 데이터
+            
+        else:
+            self.logger.warning(f"[{session_id}] Unsupported frame type: 0x{first_byte:02X}")
+            return
+        
+        self.logger.info(f"[{session_id}] UDS Service: 0x{service_id:02X}, Data: {uds_data.hex()}")
         
         if service_id == 0x27:
             self.handle_security_access(session_id, can_msg)
         else:
             self.logger.debug(f"Unhandled UDS service 0x{service_id:02X} from {session_id}")
+            # 지원하지 않는 서비스 에러 응답
+            self.send_uds_error(session_id, service_id, 0x11)  # Service not supported
     
     def handle_security_access(self, session_id, can_msg):
         data = can_msg.data
@@ -427,58 +458,87 @@ class CANBroker:
         self.forward_to_engine(session_id, can_msg)
     
     def send_uds_error(self, session_id, service_id, error_code):
-        error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
-        error_data += b'\x00\x00\x00\x00'
-        error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
-        self.send_to_session(session_id, error_response)
+        # 특별한 에러 코드들에 대해 미묘한 힌트 포함
+        if error_code == 0x36:  # Too many attempts
+            # 에러 응답의 추가 바이트에 힌트 숨기기
+            error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
+            error_data += struct.pack('>BBBB', 0x0A, 0x00, 0x1E, 0x00)  # 0x0A=10초, 0x1E=30초
+            error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
+            self.send_to_session(session_id, error_response)
+            
+        elif error_code == 0x37:  # Time delay  
+            # 대기 시간을 바이트로 힌트
+            error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
+            error_data += struct.pack('>BBBB', 0x1E, 0x00, 0x00, 0x00)  # 0x1E = 30초
+            error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
+            self.send_to_session(session_id, error_response)
+            
+        else:
+            # 일반 에러 응답
+            error_data = struct.pack('>BBBB', 0x03, 0x7F, service_id, error_code)
+            error_data += b'\x00\x00\x00\x00'
+            error_response = CANMessage(can_id=0x7E8, data=error_data[:8])
+            self.send_to_session(session_id, error_response)
         
         error_names = {
             0x12: "Sub-function not supported",
-            0x13: "Incorrect message length",
+            0x13: "Incorrect message length", 
             0x22: "Conditions not correct",
             0x31: "Request out of range",
             0x33: "Security access denied",
-            0x35: "Invalid key",
-            0x36: "Exceeded number of attempts",
-            0x37: "Required time delay not expired"
+            0x35: "Invalid key - Check your calculation",
+            0x36: "Exceeded number of attempts - Seeds expire in 10s, use automation!",
+            0x37: "Required time delay not expired - Wait 30s or start new session"
         }
         
         error_name = error_names.get(error_code, f"Unknown error 0x{error_code:02X}")
         self.logger.info(f"[{session_id}] UDS Error: {error_name}")
     
     def forward_to_engine(self, session_id, can_msg):
-        if len(can_msg.data) >= 3 and can_msg.data[1] == 0x22:
-            flag_data = b"FLAG{ECU_HACKED_2024}"
+        self.logger.info(f"[{session_id}] Forwarding message to engine ECU: ID=0x{can_msg.can_id:03X}, Data={can_msg.data.hex()}")
+        
+        # Engine ECU가 연결되어 있는지 확인
+        engine_session = 'engine_shared'
+        if engine_session in self.sessions:
+            # Engine ECU에 메시지 전달
+            forward_msg = {
+                'type': 'forward',
+                'original_session': session_id,
+                'can_id': can_msg.can_id,
+                'data': can_msg.data.hex(),
+                'timestamp': can_msg.timestamp
+            }
             
-            total_length = len(flag_data) + 3
-            
-            first_frame = struct.pack('>BB', 0x10 | (total_length >> 8), total_length & 0xFF)
-            first_frame += struct.pack('>BB', 0x62, 0xF1)
-            first_frame += flag_data[:4]
-            
-            response1 = CANMessage(can_id=0x458, data=first_frame)
-            self.send_to_session(session_id, response1)
-            
-            remaining_data = flag_data[4:]
-            frame_counter = 1
-            
-            while remaining_data:
-                frame_data = struct.pack('>B', 0x20 | frame_counter)
-                chunk = remaining_data[:7]
-                frame_data += chunk
-                frame_data += b'\x00' * (8 - len(frame_data))
-                
-                response = CANMessage(can_id=0x458, data=frame_data)
-                time.sleep(0.01)
-                self.send_to_session(session_id, response)
-                
-                remaining_data = remaining_data[7:]
-                frame_counter = (frame_counter + 1) & 0x0F
-            
-            self.logger.info(f"[{session_id}] Engine ECU flag sent via multi-frame")
+            success = self.send_raw_message(engine_session, json.dumps(forward_msg))
+            if success:
+                self.logger.info(f"[{session_id}] Message successfully forwarded to engine ECU")
+            else:
+                self.logger.error(f"[{session_id}] Failed to forward message to engine ECU")
+                # 에러 응답
+                error_response = CANMessage(can_id=0x458, data=bytes([0x7F, 0x22, 0x22]))  # Conditions not correct
+                self.send_to_session(session_id, error_response)
+        else:
+            self.logger.warning(f"[{session_id}] Engine ECU not connected")
+            # Engine ECU 연결 안됨 응답
+            error_response = CANMessage(can_id=0x458, data=bytes([0x7F, 0x22, 0x22]))  # Conditions not correct
+            self.send_to_session(session_id, error_response)
     
     def handle_engine_response(self, session_id, can_msg):
-        pass
+        """Engine ECU로부터 받은 응답을 처리"""
+        try:
+            msg_data = json.loads(can_msg)
+            if msg_data.get('type') == 'engine_response':
+                target_session = msg_data['target_session']
+                response_can_id = msg_data['can_id']
+                response_data = bytes.fromhex(msg_data['data'])
+                
+                # 원래 세션으로 응답 전달
+                response_msg = CANMessage(can_id=response_can_id, data=response_data)
+                self.send_to_session(target_session, response_msg)
+                
+                self.logger.info(f"[{target_session}] Engine response forwarded: ID=0x{response_can_id:03X}, Data={response_data.hex()}")
+        except Exception as e:
+            self.logger.error(f"Error handling engine response: {e}")
     
     def send_to_session(self, session_id, can_msg):
         if session_id in self.sessions:

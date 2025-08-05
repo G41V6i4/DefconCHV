@@ -214,17 +214,25 @@ class EngineECU:
                 print(f"🎉 Session {session_id} found the secret flag!")
                 flag_data = self.secret_flag.encode()
                 
-                # 긴 데이터는 여러 메시지로 분할 (실제로는 ISO-TP 사용)
-                if len(flag_data) <= 5:  # CAN 데이터 길이 제한 (8바이트 - 3바이트 헤더)
+                # ISO-TP 다중 프레임으로 전체 플래그 반환
+                response_data = bytes([0x62, 0xF1, 0xA0]) + flag_data
+                
+                if len(response_data) <= 8:
+                    # 단일 프레임으로 전송 가능
                     return {
                         'can_id': 0x4A1,
-                        'data': bytes([0x62, 0xF1, 0xA0]) + flag_data
+                        'data': response_data + b'\x00' * (8 - len(response_data))
                     }
                 else:
-                    # 첫 번째 청크만 반환
+                    # 다중 프레임 전송 (첫 번째 프레임)
+                    total_length = len(response_data)
+                    first_frame = struct.pack('>BB', 0x10 | ((total_length >> 8) & 0x0F), total_length & 0xFF)
+                    first_frame += response_data[:6]  # 6바이트까지 첫 프레임에 포함
+                    
+                    # 여기서는 첫 번째 프레임만 반환 (실제로는 후속 프레임들도 전송해야 함)
                     return {
                         'can_id': 0x4A1,
-                        'data': bytes([0x62, 0xF1, 0xA0]) + flag_data[:5]
+                        'data': first_frame
                     }
             
             elif did == 0x1337:  # Alternative secret access

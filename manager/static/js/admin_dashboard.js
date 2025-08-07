@@ -109,8 +109,26 @@ function startAutoRefresh() {
     }, 10000); // 10초마다 새로고침
 }
 
+function confirmLogout() {
+    return confirm('정말로 로그아웃하시겠습니까?');
+}
+
+function fetchCSRFToken() {
+    fetch('/admin/csrf-token')
+        .then(response => response.json())
+        .then(data => {
+            if (data.csrf_token) {
+                document.getElementById('csrf_token').value = data.csrf_token;
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching CSRF token:', error);
+        });
+}
+
 // 페이지 로드 시 초기화
 document.addEventListener('DOMContentLoaded', function() {
+    fetchCSRFToken();
     startAutoRefresh();
 });
 

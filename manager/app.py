@@ -65,12 +65,87 @@ SHARED_NETWORK = "ecu_shared_network"
 SHARED_CONTAINERS = ["gateway_shared", "engine_shared"]
 
 # 보안 함수들
+csrf_tokens = {}
+
 def generate_csrf_token():
-    return secrets.token_hex(32)
+    # 세션별 고유한 CSRF 토큰 생성
+    token = secrets.token_hex(32)
+    session_id = session.get('session_id')
+    if not session_id:
+        session_id = secrets.token_hex(16)
+        session['session_id'] = session_id
+    
+    csrf_tokens[session_id] = {
+        'token': token,
+        'created_at': time.time(),
+        'used_count': 0,
+        'max_uses': 10,  # 토큰 재사용 제한
+        'expires_at': time.time() + 1800  # 30분 만료
+    }
+    
+    session['csrf_token'] = token
+    session['csrf_created_at'] = time.time()
+    
+    # 만료된 토큰 정리
+    cleanup_expired_csrf_tokens()
+    
+    return token
 
 def verify_csrf_token(token):
-    stored_token = session.get('csrf_token')
-    return stored_token and hmac.compare_digest(stored_token, token)
+    if not token:
+        return False
+        
+    session_id = session.get('session_id')
+    if not session_id or session_id not in csrf_tokens:
+        return False
+    
+    csrf_data = csrf_tokens[session_id]
+    stored_token = csrf_data['token']
+    
+    # 토큰 값 비교
+    if not hmac.compare_digest(stored_token, token):
+        return False
+    
+    # 만료 시간 확인
+    if time.time() > csrf_data['expires_at']:
+        del csrf_tokens[session_id]
+        return False
+    
+    # 사용 횟수 확인
+    csrf_data['used_count'] += 1
+    if csrf_data['used_count'] > csrf_data['max_uses']:
+        del csrf_tokens[session_id]
+        return False
+    
+    # 세션의 토큰과도 비교 (이중 검증)
+    session_token = session.get('csrf_token')
+    if not session_token or not hmac.compare_digest(session_token, token):
+        return False
+    
+    # 토큰 생성 시간 확인 (세션 탈취 방지)
+    token_age = time.time() - session.get('csrf_created_at', 0)
+    if token_age > 1800:  # 30분 이상 된 토큰 거부
+        return False
+    
+    return True
+
+def cleanup_expired_csrf_tokens():
+    current_time = time.time()
+    expired_sessions = [
+        session_id for session_id, data in csrf_tokens.items()
+        if current_time > data['expires_at']
+    ]
+    for session_id in expired_sessions:
+        del csrf_tokens[session_id]
+
+def require_fresh_csrf():
+    """중요한 작업을 위한 신선한 CSRF 토큰 요구"""
+    session_id = session.get('session_id')
+    if session_id in csrf_tokens:
+        csrf_data = csrf_tokens[session_id]
+        token_age = time.time() - csrf_data['created_at']
+        return token_age < 300  # 5분 이내 생성된 토큰만 허용
+    return False
 
 def is_ip_blocked(ip):
     if ip not in failed_login_attempts:
@@ -121,6 +196,34 @@ def require_admin_auth(f):
         
         return f(*args, **kwargs)
     return decorated_function
+
+def require_csrf_protection(require_fresh=False):
+    """CSRF 보호 데코레이터"""
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if request.method == 'POST':
+                # POST 요청에서 CSRF 토큰 확인
+                token = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token')
+                if not token:
+                    logger.warning(f"Missing CSRF token from IP: {get_remote_address()}")
+                    return jsonify({"error": "Missing CSRF token"}), 400
+                
+                if not verify_csrf_token(token):
+                    logger.warning(f"Invalid CSRF token from IP: {get_remote_address()}")
+                    return jsonify({"error": "Invalid CSRF token"}), 400
+                
+                # 중요한 작업의 경우 신선한 토큰 요구
+                if require_fresh and not require_fresh_csrf():
+                    logger.warning(f"Stale CSRF token used for sensitive operation from IP: {get_remote_address()}")
+                    return jsonify({"error": "Fresh CSRF token required for this operation"}), 400
+                
+                # 토큰 사용 로깅
+                logger.info(f"Valid CSRF token used by IP: {get_remote_address()}")
+            
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 def get_unused_port():
     used_ports = [session['port'] for session in active_sessions.values()]
@@ -381,11 +484,17 @@ def admin_login():
 
 @app.route("/admin/logout", methods=["POST"])
 @require_admin_auth
+@require_csrf_protection(require_fresh=True)
 def admin_logout():
     client_ip = get_remote_address()
     admin_username = session.get('admin_username', 'unknown')
+    session_id = session.get('session_id')
     
     logger.info(f"Admin logout: {admin_username} from IP: {client_ip}")
+    
+    # CSRF 토큰 정리
+    if session_id and session_id in csrf_tokens:
+        del csrf_tokens[session_id]
     
     session.clear()
     return redirect(url_for('admin_login'))
@@ -394,6 +503,13 @@ def admin_logout():
 @require_admin_auth
 def admin_dashboard():
     return render_template('admin_dashboard.html')
+
+@app.route("/admin/csrf-token")
+@require_admin_auth
+def admin_csrf_token():
+    """신선한 CSRF 토큰 제공"""
+    csrf_token = generate_csrf_token()
+    return jsonify({"csrf_token": csrf_token})
 
 @app.route("/admin/sessions")
 @require_admin_auth

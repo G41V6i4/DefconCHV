@@ -32,61 +32,40 @@ limiter = Limiter(
 )
 limiter.init_app(app)
 
-# 메모리 효율적인 로깅 설정
+# 로깅 설정
 logging.basicConfig(
-    level=logging.WARNING,  # WARNING 이상만 로그 (메모리 절약)
-    format='%(asctime)s - %(levelname)s - %(message)s',  # 간단한 포맷
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('admin_access.log', maxBytes=10*1024*1024, backupCount=2),  # 10MB 로테이션
+        logging.FileHandler('admin_access.log'),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
 
-# 메모리 모니터링
-import psutil
-import gc
-
-def get_memory_usage():
-    """현재 메모리 사용량 반환"""
-    process = psutil.Process()
-    return process.memory_info().rss / 1024 / 1024  # MB 단위
-
-def force_garbage_collection():
-    """강제 가비지 컬렉션"""
-    gc.collect()
-    return gc.get_count()
-
-# 메모리 최적화 설정
+# 설정
 DOCKER_IMAGE_INFOTAINMENT = "ecu_infotainment:latest"
 DOCKER_IMAGE_GATEWAY = "ecu_gateway:latest"
 DOCKER_IMAGE_ENGINE = "ecu_engine:latest"
 PORT_RANGE = (20000, 30000)
-CONTAINER_TIMEOUT = 1800  # 30분으로 단축 (메모리 절약)
-MAX_CONCURRENT_SESSIONS = 100
-MEMORY_LIMIT_CONTAINER = "128m"  # 컨테이너당 128MB 제한
-CPU_LIMIT_CONTAINER = "0.5"     # CPU 0.5 코어 제한
+CONTAINER_TIMEOUT = 3600
 
 # 어드민 계정 설정
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', 
     generate_password_hash('SecureAdmin2024!@#'))
 
-# 메모리 효율적인 세션 관리
+# 활성 세션 관리
 active_sessions = {}
 failed_login_attempts = {}
-# admin_sessions 제거 (중복 데이터)
+admin_sessions = {}
 
-# 공유 ECU 네트워크 (모든 세션이 공유)
+# 공유 ECU 네트워크
 SHARED_NETWORK = "ecu_shared_network"
 SHARED_CONTAINERS = ["gateway_shared", "engine_shared"]
 
-# 메모리 효율적인 CSRF 관리
+# 보안 함수들
 csrf_tokens = {}
-
-# 세션 풀링을 위한 설정
-POOLED_CONTAINERS = {}  # 재사용 가능한 컨테이너 풀
-MAX_POOL_SIZE = 50      # 풀 최대 크기
 
 def generate_csrf_token():
     # 세션별 고유한 CSRF 토큰 생성
@@ -151,19 +130,13 @@ def verify_csrf_token(token):
     return True
 
 def cleanup_expired_csrf_tokens():
-    """메모리 효율적인 CSRF 토큰 정리"""
     current_time = time.time()
-    # 만료된 토큰들을 한 번에 정리
-    global csrf_tokens
-    csrf_tokens = {
-        session_id: data for session_id, data in csrf_tokens.items()
-        if current_time <= data['expires_at']
-    }
-    
-    # CSRF 토큰이 100개를 넘으면 가장 오래된 것부터 정리
-    if len(csrf_tokens) > 100:
-        sorted_tokens = sorted(csrf_tokens.items(), key=lambda x: x[1]['created_at'])
-        csrf_tokens = dict(sorted_tokens[-100:])  # 최신 100개만 유지
+    expired_sessions = [
+        session_id for session_id, data in csrf_tokens.items()
+        if current_time > data['expires_at']
+    ]
+    for session_id in expired_sessions:
+        del csrf_tokens[session_id]
 
 def require_fresh_csrf():
     """중요한 작업을 위한 신선한 CSRF 토큰 요구"""
@@ -259,50 +232,12 @@ def get_unused_port():
         if port not in used_ports:
             return port
 
-def get_pooled_container():
-    """재사용 가능한 컨테이너를 풀에서 가져오기"""
-    if POOLED_CONTAINERS and len(POOLED_CONTAINERS) > 0:
-        container_name = list(POOLED_CONTAINERS.keys())[0]
-        container_info = POOLED_CONTAINERS.pop(container_name)
-        return container_name, container_info['port']
-    return None, None
-
-def return_to_pool(container_name, port):
-    """컨테이너를 풀에 반환"""
-    if len(POOLED_CONTAINERS) < MAX_POOL_SIZE:
-        POOLED_CONTAINERS[container_name] = {
-            'port': port,
-            'last_used': time.time()
-        }
-        return True
-    else:
-        # 풀이 가득 찬 경우 컨테이너 삭제
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-        return False
-
 def cleanup_session(session_id):
     if session_id in active_sessions:
         session = active_sessions[session_id]
-        
-        # 컨테이너를 풀에 반환 시도
         for container in session['containers']:
-            if not return_to_pool(container, session.get('port')):
-                # 풀 반환 실패 시 삭제
-                subprocess.run(["docker", "rm", "-f", container], capture_output=True)
-        
+            subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         del active_sessions[session_id]
-
-def cleanup_old_pooled_containers():
-    """오래된 풀 컨테이너 정리 (30분 이상 미사용)"""
-    current_time = time.time()
-    old_containers = [
-        name for name, info in POOLED_CONTAINERS.items()
-        if current_time - info['last_used'] > 1800
-    ]
-    
-    for container_name in old_containers:
-        subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-        del POOLED_CONTAINERS[container_name]
 
 def get_can_broker_host():
     try:
@@ -394,11 +329,8 @@ def static_files(filename):
 
 @app.route("/start", methods=["POST"])
 def start_environment():
-    # 동시 세션 제한 확인
-    if len(active_sessions) >= MAX_CONCURRENT_SESSIONS:
-        return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached"}), 429
-    
     session_id = f"session_{int(time.time())}_{random.randint(1000, 9999)}"
+    port = get_unused_port()
     
     try:
         ensure_shared_infrastructure()
@@ -406,54 +338,24 @@ def start_environment():
         if not wait_for_can_broker():
             return jsonify({"error": "CAN broker failed to start"}), 500
         
-        # 풀에서 컨테이너 재사용 시도
-        pooled_container, pooled_port = get_pooled_container()
-        
-        if pooled_container:
-            # 기존 컨테이너 재사용
-            infotainment_name = pooled_container
-            port = pooled_port
-            
-            # 컨테이너 재시작하여 새 세션 ID 적용
-            subprocess.run([
-                "docker", "restart", infotainment_name
-            ], check=True)
-            
-            # 환경 변수 업데이트 (재시작 후)
-            subprocess.run([
-                "docker", "exec", infotainment_name,
-                "sh", "-c", f"export SESSION_ID={session_id}"
-            ], capture_output=True)
-            
-        else:
-            # 새 컨테이너 생성 (메모리 제한 적용)
-            port = get_unused_port()
-            infotainment_name = f"infotainment_{session_id}"
-            subprocess.run([
-                "docker", "run", "-d",
-                "--name", infotainment_name,
-                "--network", SHARED_NETWORK,
-                "-p", f"{port}:1234",
-                "-e", f"SESSION_ID={session_id}",
-                "--memory", MEMORY_LIMIT_CONTAINER,
-                "--cpus", CPU_LIMIT_CONTAINER,
-                "--restart", "no",  # 자동 재시작 비활성화
-                DOCKER_IMAGE_INFOTAINMENT
-            ], check=True)
+        infotainment_name = f"infotainment_{session_id}"
+        subprocess.run([
+            "docker", "run", "-d",
+            "--name", infotainment_name,
+            "--network", SHARED_NETWORK,
+            "-p", f"{port}:1234",
+            "-e", f"SESSION_ID={session_id}",
+            DOCKER_IMAGE_INFOTAINMENT
+        ], check=True)
         
         active_sessions[session_id] = {
             'port': port,
             'containers': [infotainment_name],
-            'created_at': time.time(),
-            'memory_usage': 0  # 메모리 사용량 추적용
+            'created_at': time.time()
         }
         
-        # 세션 만료 타이머
         timer = Timer(CONTAINER_TIMEOUT, cleanup_session, [session_id])
         timer.start()
-        
-        # 정기적으로 풀 정리
-        cleanup_old_pooled_containers()
         
         return jsonify({
             "session_id": session_id,
@@ -781,11 +683,6 @@ def gateway_logs_live():
 @app.route("/health")
 def health_check():
     try:
-        # 메모리 정리 실행
-        force_garbage_collection()
-        cleanup_expired_csrf_tokens()
-        cleanup_old_pooled_containers()
-        
         result = subprocess.run(["docker", "version"], capture_output=True)
         docker_ok = result.returncode == 0
         
@@ -799,20 +696,12 @@ def health_check():
         
         can_broker_ok = wait_for_can_broker()
         
-        # 메모리 사용량 체크
-        memory_mb = get_memory_usage()
-        memory_status = "ok" if memory_mb < 20000 else "high"  # 20GB 이상이면 high
-        
         return jsonify({
             "status": "healthy" if docker_ok and can_broker_ok else "degraded",
             "docker": "ok" if docker_ok else "error",
             "can_broker": "ok" if can_broker_ok else "error", 
             "shared_containers": shared_containers_status,
-            "active_sessions": len(active_sessions),
-            "pooled_containers": len(POOLED_CONTAINERS),
-            "memory_usage_mb": round(memory_mb, 1),
-            "memory_status": memory_status,
-            "csrf_tokens": len(csrf_tokens)
+            "active_sessions": len(active_sessions)
         })
         
     except Exception as e:
@@ -821,64 +710,14 @@ def health_check():
             "message": str(e)
         }), 500
 
-def memory_cleanup_scheduler():
-    """정기적인 메모리 정리 스케줄러"""
-    import threading
-    import time
-    
-    def cleanup_task():
-        while True:
-            try:
-                # 5분마다 메모리 정리
-                time.sleep(300)
-                
-                memory_usage = get_memory_usage()
-                logger.warning(f"Current memory usage: {memory_usage:.1f}MB")
-                
-                # 메모리 사용량이 18GB를 넘으면 강제 정리
-                if memory_usage > 18000:
-                    logger.warning("High memory usage detected, performing cleanup")
-                    
-                    # 오래된 세션 강제 정리 (1시간 이상)
-                    current_time = time.time()
-                    old_sessions = [
-                        sid for sid, data in active_sessions.items()
-                        if current_time - data['created_at'] > 3600
-                    ]
-                    
-                    for session_id in old_sessions:
-                        cleanup_session(session_id)
-                        logger.warning(f"Cleaned up old session: {session_id}")
-                    
-                    # 강제 가비지 컬렉션
-                    force_garbage_collection()
-                    cleanup_expired_csrf_tokens()
-                    cleanup_old_pooled_containers()
-                    
-                    logger.warning(f"Cleanup completed, memory usage: {get_memory_usage():.1f}MB")
-                    
-            except Exception as e:
-                logger.error(f"Memory cleanup error: {e}")
-    
-    cleanup_thread = threading.Thread(target=cleanup_task, daemon=True)
-    cleanup_thread.start()
-    return cleanup_thread
-
 if __name__ == "__main__":
     print("=" * 50)
-    print("DefCon CHV Manager Starting (Memory Optimized for 100 users)...")
+    print("DefCon CHV Manager Starting...")
     print("=" * 50)
     print(f"Admin Username: {ADMIN_USERNAME}")
     print(f"Default Password: SecureAdmin2024!@#")
     print(f"Admin Login URL: http://localhost:8080/admin/login")
-    print(f"Max Concurrent Sessions: {MAX_CONCURRENT_SESSIONS}")
-    print(f"Container Memory Limit: {MEMORY_LIMIT_CONTAINER}")
-    print(f"Container CPU Limit: {CPU_LIMIT_CONTAINER}")
-    print(f"Container Pool Size: {MAX_POOL_SIZE}")
     print("=" * 50)
-    
-    # 메모리 정리 스케줄러 시작
-    memory_cleanup_scheduler()
     
     print("Initializing shared ECU infrastructure...")
     try:
@@ -891,7 +730,4 @@ if __name__ == "__main__":
         print(f"Failed to initialize shared infrastructure: {e}")
         exit(1)
     
-    # 초기 메모리 사용량 로깅
-    print(f"Initial memory usage: {get_memory_usage():.1f}MB")
-    
-    app.run(host="0.0.0.0", port=8080, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=8080, debug=True)
